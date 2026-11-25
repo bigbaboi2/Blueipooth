@@ -45,7 +45,7 @@ class SecureLanClient(
     private val onConnectionState: (connected: Boolean, pcName: String, endpoint: String, rttMs: Double) -> Unit,
     private val onBleScanCommand: (Boolean) -> Unit,
     private val onBleAdvCommand: (Boolean, String) -> Unit,
-    private val onAudioConfig: (mode: String, micEnabled: Boolean) -> Unit,
+    private val onAudioConfig: (mode: String, micEnabled: Boolean, jitterBufferMs: Int) -> Unit,
     private val onStereoOpusPacket: (seq: Long, opus: ByteArray) -> Unit,
     private val onDiscoveredHostsUpdated: (List<DiscoveredPcHost>) -> Unit
 ) {
@@ -317,7 +317,8 @@ class SecureLanClient(
                 val obj = JSONObject(json)
                 onAudioConfig(
                     obj.optString("mode", "GamingOpus"),
-                    obj.optBoolean("micEnabled", true)
+                    obj.optBoolean("micEnabled", true),
+                    obj.optInt("jitterBufferMs", 30)
                 )
             }
         }

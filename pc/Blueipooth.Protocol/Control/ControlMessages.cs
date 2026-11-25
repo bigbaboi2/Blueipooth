@@ -72,7 +72,8 @@ public sealed record AudioConfigMessage(
     [property: JsonPropertyName("sampleRate")] int SampleRate,
     [property: JsonPropertyName("channels")] int Channels,
     [property: JsonPropertyName("frameMs")] int FrameMs,
-    [property: JsonPropertyName("micEnabled")] bool MicEnabled);
+    [property: JsonPropertyName("micEnabled")] bool MicEnabled,
+    [property: JsonPropertyName("jitterBufferMs")] int JitterBufferMs = 30);
 
 public sealed record MediaControlMessage(
     [property: JsonPropertyName("key")] string Key);

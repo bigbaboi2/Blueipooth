@@ -114,8 +114,8 @@ class BlueipoothBridgeService : Service() {
                 bleProxy.setAdvertising(enable, hex)
                 _uiState.update { it.copy(bleAdvertising = bleProxy.isAdvertising) }
             },
-            onAudioConfig = { mode, mic ->
-                audioBridge.applyAudioConfig(mic)
+            onAudioConfig = { mode, mic, jitterMs ->
+                audioBridge.applyAudioConfig(mic, jitterMs)
                 _uiState.update { it.copy(audioMode = mode, micEnabled = mic) }
             },
             onStereoOpusPacket = { seq, opus ->

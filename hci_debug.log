@@ -1,0 +1,5 @@
+2026-11-25 15:43:53,386 [DEBUG] asyncio: Using proactor: IocpProactor
+2026-11-25 15:43:53,388 [DEBUG] bumble.link: new controller: <virtual_controller.BlueipoothVirtualController object at 0x0000029CD40E3C10>
+2026-11-25 15:43:53,388 [INFO] ipc_protocol: Control IPC server listening on 127.0.0.1:49553
+2026-11-25 15:43:53,388 [INFO] blueipooth.bumble: H4 HCI TCP server listening on 127.0.0.1:49552
+2026-11-25 15:43:53,392 [INFO] ipc_protocol: Control IPC client connected: ('127.0.0.1', 58246)

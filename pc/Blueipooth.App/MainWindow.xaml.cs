@@ -175,8 +175,9 @@ public partial class MainWindow : Window
             TxtPhoneStatus.Foreground = System.Windows.Media.Brushes.LightGreen;
 
             double oneWayNetMs = phone.IsUsbLink ? 1.0 : Math.Max(1.0, phone.RttMs / 2.0);
-            double totalAudioMs = oneWayNetMs + 30.0; // 30ms Jitter Buffer
-            TxtAudioLatency.Text = $"~{totalAudioMs:0} ms (Mạng {oneWayNetMs:0.0}ms + Đệm 30ms)";
+            int bufMs = _coordinator.CurrentJitterBufferMs;
+            double totalAudioMs = oneWayNetMs + bufMs;
+            TxtAudioLatency.Text = $"~{totalAudioMs:0} ms (Mạng {oneWayNetMs:0.0}ms + Đệm {bufMs}ms)";
             TxtAudioLatency.Foreground = System.Windows.Media.Brushes.LightSkyBlue;
         }
         else
@@ -263,7 +264,18 @@ public partial class MainWindow : Window
         if (!_uiInitialized) return;
         string mode = RbGamingMode.IsChecked == true ? "GamingOpus" : "NativeA2dp";
         bool mic = ChkMicBridge.IsChecked == true;
-        await _coordinator.SetAudioModeAsync(mode, mic);
+        int bufMs = (int)SldJitterBuffer.Value;
+        await _coordinator.SetAudioModeAsync(mode, mic, bufMs);
+    }
+
+    private async void OnJitterSliderChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (!_uiInitialized) return;
+        int bufMs = (int)e.NewValue;
+        TxtBufferVal.Text = $"{bufMs} ms";
+        string mode = RbGamingMode.IsChecked == true ? "GamingOpus" : "NativeA2dp";
+        bool mic = ChkMicBridge.IsChecked == true;
+        await _coordinator.SetAudioModeAsync(mode, mic, bufMs);
     }
 
     private void OnNoiseFilterChanged(object sender, RoutedEventArgs e)

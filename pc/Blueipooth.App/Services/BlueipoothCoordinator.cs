@@ -21,6 +21,7 @@ public sealed partial class BlueipoothCoordinator : IAsyncDisposable
     public WasapiOpusAudioEngine AudioEngine { get; }
 
     public string CurrentAudioMode { get; private set; } = "GamingOpus"; // "GamingOpus" | "NativeA2dp"
+    public int CurrentJitterBufferMs { get; private set; } = 30;
     public HeadsetStateMessage? AttachedHeadset { get; private set; }
     public string? SynthesizedStereoMac { get; private set; }
     public string? SynthesizedMicMac { get; private set; }
@@ -99,9 +100,10 @@ public sealed partial class BlueipoothCoordinator : IAsyncDisposable
         }
     }
 
-    public async Task SetAudioModeAsync(string mode, bool micEnabled)
+    public async Task SetAudioModeAsync(string mode, bool micEnabled, int jitterBufferMs = 30)
     {
         CurrentAudioMode = mode;
+        CurrentJitterBufferMs = Math.Clamp(jitterBufferMs, 15, 80);
         AudioEngine.IsMicEnabled = micEnabled;
 
         if (Bumble is not null)
@@ -116,7 +118,8 @@ public sealed partial class BlueipoothCoordinator : IAsyncDisposable
             SampleRate: WasapiOpusAudioEngine.TargetSampleRate,
             Channels: WasapiOpusAudioEngine.StereoChannels,
             FrameMs: WasapiOpusAudioEngine.FrameDurationMs,
-            MicEnabled: micEnabled));
+            MicEnabled: micEnabled,
+            JitterBufferMs: CurrentJitterBufferMs));
 
         StateChanged?.Invoke();
     }
@@ -142,7 +145,7 @@ public sealed partial class BlueipoothCoordinator : IAsyncDisposable
                 string linkKind = phone.IsUsbLink ? "USB Cable (~1ms)" : "Wi-Fi / LAN";
                 Log($"Connected to Android '{phone.DeviceName}' ({phone.RemoteIp}) via {linkKind}.");
                 _ = LanServer.SendControlMessageAsync(ControlMessageType.AudioConfig, new AudioConfigMessage(
-                    CurrentAudioMode, 48000, 2, 5, AudioEngine.IsMicEnabled));
+                    CurrentAudioMode, 48000, 2, 5, AudioEngine.IsMicEnabled, CurrentJitterBufferMs));
             }
             else
             {

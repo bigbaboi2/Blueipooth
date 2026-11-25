@@ -16,9 +16,9 @@ public sealed class WasapiOpusAudioEngine : IDisposable
 {
     public const int TargetSampleRate = 48000;
     public const int StereoChannels = 2;
-    public const int FrameDurationMs = 5;
-    public const int SamplesPerChannelPerFrame = TargetSampleRate * FrameDurationMs / 1000; // 240
-    public const int InterleavedSamplesPerFrame = SamplesPerChannelPerFrame * StereoChannels; // 480
+    public const int FrameDurationMs = 10;
+    public const int SamplesPerChannelPerFrame = TargetSampleRate * FrameDurationMs / 1000; // 480
+    public const int InterleavedSamplesPerFrame = SamplesPerChannelPerFrame * StereoChannels; // 960
 
     private readonly IOpusEncoder _stereoEncoder;
     private readonly IOpusDecoder _micDecoder;

@@ -38,7 +38,7 @@ class LowLatencyAudioBridge(
 ) {
     companion object {
         const val SAMPLE_RATE = 48000
-        const val SAMPLES_PER_5MS = 240
+        const val SAMPLES_PER_5MS = 480
         const val STEREO_SAMPLES_PER_5MS = SAMPLES_PER_5MS * 2
     }
 
@@ -55,6 +55,8 @@ class LowLatencyAudioBridge(
     private val jitterFrames = TreeMap<Long, ByteArray>()
     private var jitterPrimed = false
     private var expectedSeq = 0L
+    @Volatile
+    private var targetJitterFrames = 6 // 6 * 5ms = 30ms default
 
     private var audioTrack: AudioTrack? = null
     private var playbackThread: Thread? = null
@@ -113,7 +115,8 @@ class LowLatencyAudioBridge(
         audioRecord = null
     }
 
-    fun applyAudioConfig(micEnabled: Boolean) {
+    fun applyAudioConfig(micEnabled: Boolean, jitterBufferMs: Int = 30) {
+        targetJitterFrames = (jitterBufferMs / 5).coerceIn(2, 16)
         if (micCaptureEnabled != micEnabled) {
             micCaptureEnabled = micEnabled
             updateMicCaptureThread()
@@ -124,7 +127,7 @@ class LowLatencyAudioBridge(
         synchronized(jitterLock) {
             if (!jitterPrimed) {
                 jitterFrames[seq] = opusPayload
-                if (jitterFrames.size >= 6) {
+                if (jitterFrames.size >= targetJitterFrames) {
                     jitterPrimed = true
                     expectedSeq = jitterFrames.firstKey()
                     (jitterLock as Object).notifyAll()
@@ -136,7 +139,8 @@ class LowLatencyAudioBridge(
                 return
             }
             jitterFrames[seq] = opusPayload
-            while (jitterFrames.size > 14) {
+            val maxFrames = (targetJitterFrames + 8).coerceAtLeast(10)
+            while (jitterFrames.size > maxFrames) {
                 jitterFrames.pollFirstEntry()
                 if (jitterFrames.isNotEmpty()) {
                     expectedSeq = jitterFrames.firstKey()
@@ -185,7 +189,7 @@ class LowLatencyAudioBridge(
             SAMPLE_RATE,
             AudioFormat.CHANNEL_OUT_STEREO,
             AudioFormat.ENCODING_PCM_16BIT
-        ).coerceAtLeast(STEREO_SAMPLES_PER_5MS * 4)
+        ).coerceAtLeast(STEREO_SAMPLES_PER_5MS * 16)
 
         val track = AudioTrack.Builder()
             .setAudioAttributes(
@@ -202,7 +206,7 @@ class LowLatencyAudioBridge(
                     .build()
             )
             .setBufferSizeInBytes(minBuf)
-            .setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
+            .setPerformanceMode(AudioTrack.PERFORMANCE_MODE_NONE)
             .setTransferMode(AudioTrack.MODE_STREAM)
             .build()
 

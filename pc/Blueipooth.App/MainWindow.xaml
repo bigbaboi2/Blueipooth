@@ -133,7 +133,14 @@
                     <CheckBox x:Name="ChkMicBridge" Content="Bật đường truyền Mic 2 chiều về PC (Không tụt Stereo)"
                               Foreground="#7DD3FC" IsChecked="False" Margin="0,0,0,4" Checked="OnAudioModeChanged" Unchecked="OnAudioModeChanged"/>
                     <CheckBox x:Name="ChkMicNoiseFilter" Content="Lọc tiếng ồn gió/phím &amp; Tăng âm lượng Mic (+7dB)"
-                              Foreground="#94A3B8" IsChecked="True" Margin="0,0,0,10" Checked="OnNoiseFilterChanged" Unchecked="OnNoiseFilterChanged"/>
+                              Foreground="#94A3B8" IsChecked="True" Margin="0,0,0,8" Checked="OnNoiseFilterChanged" Unchecked="OnNoiseFilterChanged"/>
+
+                    <DockPanel Margin="0,0,0,2">
+                        <TextBlock DockPanel.Dock="Right" x:Name="TxtBufferVal" Text="30 ms" Foreground="#38BDF8" FontSize="11" FontWeight="SemiBold"/>
+                        <TextBlock Text="Đệm chống rè Wi-Fi (Kéo tăng nếu bị rè):" FontSize="11" Foreground="{StaticResource TextMutedBrush}"/>
+                    </DockPanel>
+                    <Slider x:Name="SldJitterBuffer" Minimum="15" Maximum="80" Value="30" TickFrequency="5" IsSnapToTickEnabled="True"
+                            Margin="0,0,0,8" ValueChanged="OnJitterSliderChanged"/>
 
                     <TextBlock Text="Âm lượng Loa PC -> Điện thoại / Tai nghe:" FontSize="11" Foreground="{StaticResource TextMutedBrush}"/>
                     <ProgressBar x:Name="PbSpeakerLevel" Minimum="0" Maximum="100" Height="8" Margin="0,3,0,8" Foreground="#38BDF8" Background="#0F172A" BorderThickness="0"/>
