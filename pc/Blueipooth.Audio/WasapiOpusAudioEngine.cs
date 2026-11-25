@@ -17,8 +17,10 @@ public sealed class WasapiOpusAudioEngine : IDisposable, IMMNotificationClient
     private readonly IOpusEncoder _stereoEncoder;
     private readonly IOpusDecoder _micDecoder;
     private readonly AdaptiveJitterBuffer _micJitterBuffer = new(targetDepthFrames: 3, maxDepthFrames: 8);
+    private readonly SbcDecoder _sbcDecoder = new();
 
     private WasapiLoopbackCapture? _loopbackCapture;
+    private MMDevice? _captureDevice;
     private MMDeviceEnumerator? _deviceEnumerator;
     private string? _currentRenderDeviceId;
     private readonly object _captureLock = new();
@@ -98,10 +100,10 @@ public sealed class WasapiOpusAudioEngine : IDisposable, IMMNotificationClient
     private void StartLoopbackInternal()
     {
         _accumCount = 0;
-        using var defaultDev = _deviceEnumerator?.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
-        _currentRenderDeviceId = defaultDev?.ID;
-        _loopbackCapture = defaultDev is not null
-            ? new WasapiLoopbackCapture(defaultDev)
+        _captureDevice = _deviceEnumerator?.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
+        _currentRenderDeviceId = _captureDevice?.ID;
+        _loopbackCapture = _captureDevice is not null
+            ? new WasapiLoopbackCapture(_captureDevice)
             : new WasapiLoopbackCapture();
         _loopbackCapture.DataAvailable += OnWasapiDataAvailable;
         _loopbackCapture.RecordingStopped += (_, _) => { };
@@ -133,6 +135,8 @@ public sealed class WasapiOpusAudioEngine : IDisposable, IMMNotificationClient
             _loopbackCapture.Dispose();
             _loopbackCapture = null;
         }
+        _captureDevice?.Dispose();
+        _captureDevice = null;
     }
 
     void IMMNotificationClient.OnDefaultDeviceChanged(DataFlow flow, Role role, string defaultDeviceId)
@@ -266,6 +270,21 @@ public sealed class WasapiOpusAudioEngine : IDisposable, IMMNotificationClient
         return _stereoEncoder.Encode(interleaved480[..InterleavedSamplesPerFrame], SamplesPerChannelPerFrame, opusOut, opusOut.Length);
     }
 
+    public void PushIncomingA2dpSbcPacket(ReadOnlySpan<byte> rtpPayload)
+    {
+        if (_disposed || IsStreamingSpeaker) return;
+
+        float[] decoded = _sbcDecoder.DecodeRtpPayload(rtpPayload);
+        if (decoded.Length < 2) return;
+
+        int srcRate = _sbcDecoder.LastSampleRate;
+        Span<float> stereo48k = srcRate == TargetSampleRate
+            ? decoded
+            : ResampleStereo(decoded, srcRate);
+
+        ProcessStereo48kChunk(stereo48k);
+    }
+
     private void OnWasapiDataAvailable(object? sender, WaveInEventArgs e)
     {
         if (e.BytesRecorded == 0 || _loopbackCapture is null) return;
@@ -273,6 +292,12 @@ public sealed class WasapiOpusAudioEngine : IDisposable, IMMNotificationClient
         WaveFormat fmt = _loopbackCapture.WaveFormat;
         Span<float> converted = ConvertWasapiChunkToStereo48k(e.Buffer.AsSpan(0, e.BytesRecorded), fmt);
         if (converted.IsEmpty) return;
+
+        ProcessStereo48kChunk(converted);
+    }
+
+    private void ProcessStereo48kChunk(ReadOnlySpan<float> converted)
+    {
 
         // Compute speaker meter RMS
         double sumSq = 0;
@@ -357,8 +382,14 @@ public sealed class WasapiOpusAudioEngine : IDisposable, IMMNotificationClient
             return srcStereo;
         }
 
-        // Fast linear resample (e.g. 44.1kHz / 96kHz -> 48kHz)
-        int dstFrames = (int)((long)srcFrames * TargetSampleRate / fmt.SampleRate);
+        return ResampleStereo(srcStereo, fmt.SampleRate);
+    }
+
+    private static float[] ResampleStereo(float[] srcStereo, int srcRate)
+    {
+        int srcFrames = srcStereo.Length / 2;
+        if (srcFrames <= 0) return [];
+        int dstFrames = (int)((long)srcFrames * TargetSampleRate / srcRate);
         if (dstFrames <= 0) return [];
 
         float[] dstStereo = new float[dstFrames * 2];
@@ -413,6 +444,35 @@ public sealed class WasapiOpusAudioEngine : IDisposable, IMMNotificationClient
         {
             ActiveVirtualMicEndpointName = null;
         }
+    }
+
+    public static string GetActivePcMediaSummary()
+    {
+        try
+        {
+            using var enumerator = new MMDeviceEnumerator();
+            using var dev = enumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
+            var sessions = dev.AudioSessionManager.Sessions;
+            for (int i = 0; i < sessions.Count; i++)
+            {
+                using var s = sessions[i];
+                if (s.State != AudioSessionState.AudioSessionStateActive) continue;
+                uint pid = s.GetProcessID;
+                if (pid == 0 || pid == Environment.ProcessId) continue;
+                try
+                {
+                    using var proc = System.Diagnostics.Process.GetProcessById((int)pid);
+                    string title = proc.MainWindowTitle?.Trim() ?? "";
+                    if (!string.IsNullOrEmpty(title))
+                        return title.Length > 48 ? title[..45] + "..." : title;
+                    if (!string.IsNullOrEmpty(proc.ProcessName))
+                        return $"Đang phát ({proc.ProcessName})";
+                }
+                catch { }
+            }
+        }
+        catch { }
+        return "Chưa có media đang phát";
     }
 
     public void Dispose()

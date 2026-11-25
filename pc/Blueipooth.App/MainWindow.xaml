@@ -22,7 +22,7 @@
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                     <StackPanel>
                         <TextBlock Text="Blueipooth" FontSize="24" FontWeight="Bold" Foreground="{DynamicResource AccentCyanBrush}"/>
-                        <TextBlock Text="Cầu nối Bluetooth &amp; Âm thanh độ trễ thấp giữa Điện thoại và PC"
+                        <TextBlock Text="Cầu nối Bluetooth &amp; Âm thanh giữa Điện thoại và PC"
                                    Foreground="{DynamicResource TextMutedBrush}" FontSize="12.5" Margin="0,2,0,0"/>
                     </StackPanel>
                     <Border x:Name="BadgeTopConn" Background="{DynamicResource CardBgBrush}" BorderBrush="{DynamicResource CardBorderBrush}"
@@ -36,7 +36,6 @@
                 </StackPanel>
 
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                    <Button Content="Bluetooth Windows" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,8,0" Click="OnOpenBtSettingsClick"/>
                     <Button x:Name="BtnSettings" Content="⚙ Cài đặt" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,8,0"
                             ToolTip="Cài đặt giao diện và cách thoát cửa sổ" Click="OnOpenSettingsClick"/>
                     <Button Content="Ẩn xuống khay" Style="{StaticResource SecondaryButtonStyle}" Click="OnMinimizeToTrayClick"/>
@@ -63,11 +62,11 @@
                         <TextBlock Text="CHỨC NĂNG" FontSize="11" FontWeight="Bold" Foreground="{DynamicResource TextMutedBrush}" Margin="6,2,0,10"/>
 
                         <StackPanel Grid.Row="1">
-                            <RadioButton x:Name="TabConnect" Content="🔗  Kết nối QR" Style="{StaticResource NavTabRadioStyle}"
+                            <RadioButton x:Name="TabConnect" Content="🔗  Kết nối thiết bị" Style="{StaticResource NavTabRadioStyle}"
                                          IsChecked="True" Checked="OnNavTabChanged"/>
-                            <RadioButton x:Name="TabBluetooth" Content="📡  Quét Bluetooth" Style="{StaticResource NavTabRadioStyle}"
-                                         Checked="OnNavTabChanged"/>
                             <RadioButton x:Name="TabAudio" Content="🎧  Phát âm thanh" Style="{StaticResource NavTabRadioStyle}"
+                                         Checked="OnNavTabChanged"/>
+                            <RadioButton x:Name="TabBluetooth" Content="📡  Quét Bluetooth" Style="{StaticResource NavTabRadioStyle}"
                                          Checked="OnNavTabChanged"/>
                         </StackPanel>
 
@@ -103,10 +102,10 @@
                         <TranslateTransform x:Name="TabContentSlide" X="0" Y="0"/>
                     </Grid.RenderTransform>
 
-                    <!-- TAB 1 (DEFAULT): KẾT NỐI QR -->
+                    <!-- TAB 1 (DEFAULT): KẾT NỐI QR & TRẠNG THÁI -->
                     <Grid x:Name="PanelConnect" Visibility="Visible">
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="1.25*"/>
+                            <ColumnDefinition Width="1.15*"/>
                             <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
 
@@ -121,9 +120,9 @@
                                 </Grid.RowDefinitions>
 
                                 <StackPanel>
-                                    <TextBlock Text="KẾT NỐI ĐIỆN THOẠI (MẶC ĐỊNH)" FontSize="11.5" FontWeight="Bold" Foreground="{DynamicResource AccentCyanBrush}"/>
-                                    <TextBlock x:Name="TxtPhoneStatus" Text="Mở Blueipooth trên điện thoại rồi quét mã QR"
-                                               FontSize="20" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,8,0,0"/>
+                                    <TextBlock Text="KẾT NỐI THIẾT BỊ (MẶC ĐỊNH)" FontSize="11.5" FontWeight="Bold" Foreground="{DynamicResource AccentCyanBrush}"/>
+                                    <TextBlock x:Name="TxtPhoneStatus" Text="Mở Blueipooth trên điện thoại rồi quét mã"
+                                               FontSize="19" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,8,0,0"/>
                                     <TextBlock x:Name="TxtCandidateIps" Text="Đang tìm địa chỉ mạng..."
                                                Foreground="{DynamicResource TextMutedBrush}" FontSize="12.5" Margin="0,6,0,0" TextWrapping="Wrap"/>
                                 </StackPanel>
@@ -140,170 +139,150 @@
                             </Grid>
                         </Border>
 
-                        <!-- Virtual Bluetooth Adapter Controls Card -->
+                        <!-- Device & Session Telemetry Card -->
                         <Border Grid.Column="1" Background="{DynamicResource CardBgBrush}" BorderBrush="{DynamicResource CardBorderBrush}"
                                 BorderThickness="1" CornerRadius="14" Padding="22">
-                            <StackPanel>
-                                <TextBlock Text="BLUETOOTH ẢO TRÊN PC" FontSize="11.5" FontWeight="Bold" Foreground="{DynamicResource AccentCyanBrush}"/>
-                                <TextBlock Text="Card Bluetooth 5.2 Ảo" FontSize="18" FontWeight="Bold" Margin="0,6,0,4"/>
-                                <TextBlock Text="Tạo adapter Bluetooth ảo (BthUsb.sys) trên Windows để dùng điện thoại làm bộ thu phát."
-                                           Foreground="{DynamicResource TextMutedBrush}" TextWrapping="Wrap" FontSize="12.5" Margin="0,0,0,18"/>
+                            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                <StackPanel>
+                                    <TextBlock Text="TRẠNG THÁI THIẾT BỊ &amp; KÊNH PHÁT" FontSize="11.5" FontWeight="Bold" Foreground="{DynamicResource AccentCyanBrush}"/>
+                                    <TextBlock Text="Tổng quan kết nối" FontSize="18" FontWeight="Bold" Margin="0,6,0,12"/>
 
-                                <Button x:Name="BtnToggleVirtualBt" Content="Bật Card Bluetooth Ảo trên Windows"
-                                        Style="{StaticResource PrimaryButtonStyle}" Click="OnToggleVirtualBtClick"/>
-                                <Button x:Name="BtnInstallDriver" Content="Tự cài thành phần còn thiếu"
-                                        Style="{StaticResource SecondaryButtonStyle}" Margin="0,10,0,0" Click="OnInstallDriverClick"/>
+                                    <!-- Kênh phát & Độ trễ thực tế -->
+                                    <Border Background="{DynamicResource SubCardBgBrush}" BorderBrush="{DynamicResource CardBorderBrush}"
+                                            BorderThickness="1" CornerRadius="10" Padding="12" Margin="0,0,0,10">
+                                        <StackPanel>
+                                            <TextBlock Text="KÊNH ĐANG PHÁT &amp; ĐỘ TRỄ" FontSize="10.5" FontWeight="Bold" Foreground="{DynamicResource TextMutedBrush}" Margin="0,0,0,4"/>
+                                            <TextBlock x:Name="TxtQrRouteChannel" Text="Chờ kết nối..." FontSize="13.5" FontWeight="Bold"
+                                                       Foreground="{DynamicResource AccentCyanBrush}" TextWrapping="Wrap"/>
+                                            <TextBlock x:Name="TxtQrAudioLatency" Text="Độ trễ thực tế: --" FontSize="12" FontWeight="SemiBold"
+                                                       Foreground="#4ADE80" Margin="0,4,0,0" TextWrapping="Wrap"/>
+                                        </StackPanel>
+                                    </Border>
 
-                                <Border Background="{DynamicResource SubCardBgBrush}" CornerRadius="10" Padding="12" Margin="0,16,0,0"
-                                        BorderBrush="{DynamicResource CardBorderBrush}" BorderThickness="1">
-                                    <StackPanel>
-                                        <TextBlock Text="Hướng dẫn nhanh" FontWeight="SemiBold" FontSize="12.5" Margin="0,0,0,6"/>
-                                        <TextBlock Text="1. Mở app Blueipooth trên Android (tab giữa)." Foreground="{DynamicResource TextMutedBrush}" FontSize="12" TextWrapping="Wrap"/>
-                                        <TextBlock Text="2. Bấm Quét Mã QR và hướng camera vào mã bên trái." Foreground="{DynamicResource TextMutedBrush}" FontSize="12" TextWrapping="Wrap" Margin="0,3,0,0"/>
-                                        <TextBlock Text="3. Sau khi nối, chuyển sang tab Quét Bluetooth hoặc Phát âm thanh." Foreground="{DynamicResource TextMutedBrush}" FontSize="12" TextWrapping="Wrap" Margin="0,3,0,0"/>
-                                    </StackPanel>
-                                </Border>
+                                    <!-- Trạng thái điện thoại -->
+                                    <Border Background="{DynamicResource SubCardBgBrush}" BorderBrush="{DynamicResource CardBorderBrush}"
+                                            BorderThickness="1" CornerRadius="10" Padding="12" Margin="0,0,0,10">
+                                        <StackPanel>
+                                            <TextBlock Text="ĐIỆN THOẠI ANDROID" FontSize="10.5" FontWeight="Bold" Foreground="{DynamicResource TextMutedBrush}" Margin="0,0,0,8"/>
+                                            <DockPanel Margin="0,0,0,6">
+                                                <TextBlock DockPanel.Dock="Right" x:Name="TxtPhoneBattery" Text="--" FontWeight="SemiBold" FontSize="12.5"/>
+                                                <TextBlock Text="Mức pin" Foreground="{DynamicResource TextMutedBrush}" FontSize="12.5"/>
+                                            </DockPanel>
+                                            <DockPanel Margin="0,0,0,6">
+                                                <TextBlock DockPanel.Dock="Right" x:Name="TxtPhoneBtState" Text="--" FontWeight="SemiBold" FontSize="12.5"/>
+                                                <TextBlock Text="Bluetooth điện thoại" Foreground="{DynamicResource TextMutedBrush}" FontSize="12.5"/>
+                                            </DockPanel>
+                                            <DockPanel Margin="0,0,0,6">
+                                                <TextBlock DockPanel.Dock="Right" x:Name="TxtConnectedBtNames" Text="Không có" FontWeight="SemiBold" FontSize="12.5"
+                                                           Foreground="#4ADE80" TextTrimming="CharacterEllipsis" MaxWidth="180"/>
+                                                <TextBlock Text="Bluetooth đã nối" Foreground="{DynamicResource TextMutedBrush}" FontSize="12.5"/>
+                                            </DockPanel>
+                                            <DockPanel>
+                                                <TextBlock DockPanel.Dock="Right" x:Name="TxtPhoneAudioDevice" Text="Chưa kết nối" FontWeight="SemiBold" FontSize="12.5"
+                                                           TextTrimming="CharacterEllipsis" MaxWidth="180"/>
+                                                <TextBlock Text="Đầu ra âm thanh" Foreground="{DynamicResource TextMutedBrush}" FontSize="12.5"/>
+                                            </DockPanel>
+                                        </StackPanel>
+                                    </Border>
 
-                                <TextBlock Text="VB-CABLE by VB-Audio (vb-cable.com) • donationware • cần quyền quản trị"
-                                           Foreground="{DynamicResource TextMutedBrush}" FontSize="10.5" TextWrapping="Wrap" Margin="0,14,0,0"/>
-                            </StackPanel>
+                                    <!-- Media đang phát -->
+                                    <Border Background="{DynamicResource SubCardBgBrush}" BorderBrush="{DynamicResource CardBorderBrush}"
+                                            BorderThickness="1" CornerRadius="10" Padding="12">
+                                        <StackPanel>
+                                            <TextBlock Text="MEDIA ĐANG PHÁT" FontSize="10.5" FontWeight="Bold" Foreground="{DynamicResource TextMutedBrush}" Margin="0,0,0,8"/>
+                                            <TextBlock Text="Trên PC" FontSize="11.5" Foreground="{DynamicResource TextMutedBrush}"/>
+                                            <TextBlock x:Name="TxtPcMediaNow" Text="Chưa có media đang phát" FontSize="12.5" FontWeight="SemiBold"
+                                                       TextWrapping="Wrap" Margin="0,2,0,8"/>
+                                            <TextBlock Text="Trên Android" FontSize="11.5" Foreground="{DynamicResource TextMutedBrush}"/>
+                                            <TextBlock x:Name="TxtPhoneMediaNow" Text="Chưa kết nối" FontSize="12.5" FontWeight="SemiBold"
+                                                       TextWrapping="Wrap" Margin="0,2,0,0"/>
+                                        </StackPanel>
+                                    </Border>
+                                </StackPanel>
+                            </ScrollViewer>
                         </Border>
                     </Grid>
 
-                    <!-- TAB 2: QUÉT BLUETOOTH -->
-                    <Border x:Name="PanelBluetooth" Visibility="Collapsed"
-                            Background="{DynamicResource CardBgBrush}" BorderBrush="{DynamicResource CardBorderBrush}"
-                            BorderThickness="1" CornerRadius="14" Padding="24">
-                        <Grid>
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="*"/>
-                            </Grid.RowDefinitions>
-
-                            <Grid Grid.Row="0">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <StackPanel>
-                                    <TextBlock Text="QUÉT BLUETOOTH (BLE 2.4GHZ)" FontSize="11.5" FontWeight="Bold" Foreground="{DynamicResource AccentCyanBrush}"/>
-                                    <TextBlock Text="Gửi yêu cầu quét cho Android &amp; xem thiết bị khả dụng" FontSize="18" FontWeight="Bold" Margin="0,4,0,0"/>
-                                    <TextBlock x:Name="TxtBleScanStatus" Text="Sẵn sàng — nhấn Quét để yêu cầu điện thoại quét thiết bị xung quanh"
-                                               Foreground="{DynamicResource TextMutedBrush}" FontSize="12.5" Margin="0,4,0,0"/>
-                                </StackPanel>
-                                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                    <CheckBox x:Name="ChkHideUnnamedBle" Content="Ẩn không tên / chỉ quảng bá"
-                                              Foreground="{DynamicResource TextMutedBrush}" IsChecked="True"
-                                              VerticalAlignment="Center" Margin="0,0,12,0"
-                                              Checked="OnBleFilterChanged" Unchecked="OnBleFilterChanged"/>
-                                    <Button x:Name="BtnScanBle" Content="Quét Bluetooth" Style="{StaticResource PrimaryButtonStyle}"
-                                            Margin="0,0,8,0" Click="OnToggleBleScanClick"/>
-                                    <Button Content="Xóa danh sách" Style="{StaticResource SecondaryButtonStyle}" Click="OnClearBleListClick"/>
-                                </StackPanel>
-                            </Grid>
-
-                            <ProgressBar x:Name="PbBleScanning" Grid.Row="1" IsIndeterminate="True" Height="4" Margin="0,12,0,4"
-                                         Foreground="{DynamicResource AccentCyanBrush}" Background="{DynamicResource SubCardBgBrush}"
-                                         BorderThickness="0" Visibility="Collapsed"/>
-
-                            <Border Grid.Row="2" Background="{DynamicResource SubCardBgBrush}" BorderBrush="{DynamicResource CardBorderBrush}"
-                                    BorderThickness="1" CornerRadius="10" Padding="8" Margin="0,10,0,0">
-                                <Grid>
-                                    <TextBlock x:Name="TxtBleEmptyHint"
-                                               Text="Chưa có thiết bị Bluetooth nào được phát hiện. Hãy kết nối điện thoại và bấm Quét Bluetooth."
-                                               Foreground="{DynamicResource TextMutedBrush}" FontSize="13"
-                                               HorizontalAlignment="Center" VerticalAlignment="Center" TextWrapping="Wrap"/>
-                                    <ListBox x:Name="LstBleDevices" Background="Transparent" Foreground="{DynamicResource TextPrimaryBrush}"
-                                             BorderThickness="0" FontSize="12.5" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
-                                        <ListBox.ItemTemplate>
-                                            <DataTemplate>
-                                                <Border Background="{DynamicResource CardBgBrush}" BorderBrush="{DynamicResource CardBorderBrush}"
-                                                        BorderThickness="1" CornerRadius="8" Padding="12,9" Margin="2,3">
-                                                    <Grid>
-                                                        <Grid.ColumnDefinitions>
-                                                            <ColumnDefinition Width="*"/>
-                                                            <ColumnDefinition Width="Auto"/>
-                                                        </Grid.ColumnDefinitions>
-                                                        <StackPanel>
-                                                            <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" FontSize="13"/>
-                                                            <TextBlock Text="{Binding Subtitle}" Foreground="{DynamicResource TextMutedBrush}"
-                                                                       FontFamily="Consolas" FontSize="11.5" Margin="0,2,0,0"/>
-                                                        </StackPanel>
-                                                        <Border Grid.Column="1" Background="{DynamicResource SubCardBgBrush}" CornerRadius="6"
-                                                                Padding="10,4" VerticalAlignment="Center">
-                                                            <TextBlock Text="{Binding RssiText}" Foreground="{Binding RssiBrush}"
-                                                                       FontFamily="Consolas" FontWeight="Bold" FontSize="12"/>
-                                                        </Border>
-                                                    </Grid>
-                                                </Border>
-                                            </DataTemplate>
-                                        </ListBox.ItemTemplate>
-                                        <ListBox.ItemContainerStyle>
-                                            <Style TargetType="ListBoxItem">
-                                                <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
-                                                <Setter Property="Padding" Value="0"/>
-                                                <Setter Property="Background" Value="Transparent"/>
-                                                <Setter Property="BorderThickness" Value="0"/>
-                                            </Style>
-                                        </ListBox.ItemContainerStyle>
-                                    </ListBox>
-                                </Grid>
-                            </Border>
-                        </Grid>
-                    </Border>
-
-                    <!-- TAB 3: PHÁT ÂM THANH -->
+                    <!-- TAB 2: PHÁT ÂM THANH (REDESIGNED) -->
                     <Border x:Name="PanelAudio" Visibility="Collapsed"
                             Background="{DynamicResource CardBgBrush}" BorderBrush="{DynamicResource CardBorderBrush}"
                             BorderThickness="1" CornerRadius="14" Padding="24">
                         <ScrollViewer VerticalScrollBarVisibility="Auto">
                             <StackPanel>
-                                <TextBlock Text="PHÁT ÂM THANH &amp; MIC" FontSize="11.5" FontWeight="Bold" Foreground="{DynamicResource AccentCyanBrush}"/>
-                                <TextBlock x:Name="TxtHeadsetName" Text="Tai nghe trên điện thoại" FontSize="20" FontWeight="Bold"
-                                           Foreground="#4ADE80" Margin="0,6,0,2"/>
-                                <TextBlock x:Name="TxtAudioLatency" Text="Chờ kết nối điện thoại" Foreground="{DynamicResource AccentCyanBrush}" FontSize="13"/>
+                                <DockPanel Margin="0,0,0,14">
+                                    <Border DockPanel.Dock="Right" Background="{DynamicResource SubCardBgBrush}" BorderBrush="{DynamicResource CardBorderBrush}"
+                                            BorderThickness="1" CornerRadius="10" Padding="12,6" VerticalAlignment="Center">
+                                        <TextBlock x:Name="TxtAudioLatency" Text="Chờ kết nối" Foreground="{DynamicResource AccentCyanBrush}"
+                                                   FontWeight="SemiBold" FontSize="12"/>
+                                    </Border>
+                                    <StackPanel>
+                                        <TextBlock Text="PHÁT ÂM THANH &amp; MIC" FontSize="11.5" FontWeight="Bold" Foreground="{DynamicResource AccentCyanBrush}"/>
+                                        <TextBlock x:Name="TxtHeadsetName" Text="Loa / Tai nghe trên Điện thoại" FontSize="20" FontWeight="Bold"
+                                                   Foreground="#4ADE80" Margin="0,4,0,0"/>
+                                    </StackPanel>
+                                </DockPanel>
                                 <TextBlock x:Name="TxtDualMac" Visibility="Collapsed"/>
 
-                                <Border Background="{DynamicResource SubCardBgBrush}" BorderBrush="{DynamicResource CardBorderBrush}"
-                                        BorderThickness="1" CornerRadius="10" Padding="16" Margin="0,16,0,0">
-                                    <StackPanel>
-                                        <TextBlock Text="Chế độ truyền âm thanh" FontWeight="Bold" FontSize="14" Margin="0,0,0,10"/>
-                                        <RadioButton x:Name="RbGamingMode" Content="Âm thanh độ trễ thấp (Gaming Opus 48kHz)"
-                                                     Foreground="{DynamicResource TextPrimaryBrush}" IsChecked="True" Margin="0,0,0,8" Checked="OnAudioModeChanged"/>
-                                        <RadioButton x:Name="RbNativeA2dpMode" Content="Bluetooth Windows (A2DP chuẩn)"
-                                                     Foreground="{DynamicResource TextPrimaryBrush}" Checked="OnAudioModeChanged"/>
-                                    </StackPanel>
-                                </Border>
+                                <!-- Hình thức phát (2 sleek cards) -->
+                                <TextBlock Text="Chọn hình thức phát âm thanh" FontWeight="Bold" FontSize="14" Margin="0,0,0,10"/>
+                                <Grid Margin="0,0,0,14">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="12"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <RadioButton x:Name="RbGamingMode" Grid.Column="0"
+                                                 Content="Phát trực tiếp qua Mạng / USB"
+                                                 Tag="Truyền thẳng âm thanh stereo 48kHz từ PC sang điện thoại &amp; tai nghe"
+                                                 Style="{StaticResource ModeCardRadioStyle}"
+                                                 IsChecked="True" Checked="OnAudioModeChanged"/>
+                                    <RadioButton x:Name="RbNativeA2dpMode" Grid.Column="2"
+                                                 Content="Bluetooth Windows (Card ảo)"
+                                                 Tag="Phát qua adapter Bluetooth 5.2 ảo trong cài đặt Windows"
+                                                 Style="{StaticResource ModeCardRadioStyle}"
+                                                 Checked="OnAudioModeChanged"/>
+                                </Grid>
 
+                                <!-- Microphone & Bộ đệm -->
                                 <Border Background="{DynamicResource SubCardBgBrush}" BorderBrush="{DynamicResource CardBorderBrush}"
-                                        BorderThickness="1" CornerRadius="10" Padding="16" Margin="0,12,0,0">
+                                        BorderThickness="1" CornerRadius="12" Padding="16" Margin="0,0,0,12">
                                     <StackPanel>
                                         <TextBlock Text="Microphone &amp; Bộ đệm" FontWeight="Bold" FontSize="14" Margin="0,0,0,10"/>
-                                        <CheckBox x:Name="ChkMicBridge" Content="Truyền mic từ điện thoại/tai nghe về PC"
-                                                  Foreground="{DynamicResource TextPrimaryBrush}" IsChecked="False" Margin="0,0,0,8"
-                                                  Checked="OnAudioModeChanged" Unchecked="OnAudioModeChanged"/>
-                                        <CheckBox x:Name="ChkMicNoiseFilter" Content="Lọc ồn mic"
-                                                  Foreground="{DynamicResource TextPrimaryBrush}" IsChecked="True" Margin="0,0,0,12"
-                                                  Checked="OnNoiseFilterChanged" Unchecked="OnNoiseFilterChanged"/>
+                                        <Grid Margin="0,0,0,14">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <CheckBox x:Name="ChkMicBridge" Grid.Column="0" Content="Truyền mic từ điện thoại về PC"
+                                                      Style="{StaticResource ToggleSwitchCheckBoxStyle}" IsChecked="False"
+                                                      Checked="OnAudioModeChanged" Unchecked="OnAudioModeChanged"/>
+                                            <CheckBox x:Name="ChkMicNoiseFilter" Grid.Column="1" Content="Lọc ồn mic tự động"
+                                                      Style="{StaticResource ToggleSwitchCheckBoxStyle}" IsChecked="True"
+                                                      Checked="OnNoiseFilterChanged" Unchecked="OnNoiseFilterChanged"/>
+                                        </Grid>
 
-                                        <DockPanel Margin="0,0,0,4">
+                                        <DockPanel Margin="0,0,0,6">
                                             <TextBlock DockPanel.Dock="Right" x:Name="TxtBufferVal" Text="30 ms" Foreground="{DynamicResource AccentCyanBrush}" FontWeight="Bold"/>
-                                            <TextBlock Text="Đệm âm thanh (Jitter Buffer)" Foreground="{DynamicResource TextMutedBrush}"/>
+                                            <TextBlock Text="Đệm ổn định âm thanh (Jitter Buffer)" Foreground="{DynamicResource TextMutedBrush}"/>
                                         </DockPanel>
-                                        <Slider x:Name="SldJitterBuffer" Minimum="15" Maximum="80" Value="30" TickFrequency="5"
-                                                IsSnapToTickEnabled="True" ValueChanged="OnJitterSliderChanged"/>
+                                        <Slider x:Name="SldJitterBuffer" Minimum="15" Maximum="80" Value="30"
+                                                Style="{StaticResource ModernSliderStyle}" ValueChanged="OnJitterSliderChanged"/>
                                     </StackPanel>
                                 </Border>
 
+                                <!-- Mức tín hiệu thời gian thực -->
                                 <Border Background="{DynamicResource SubCardBgBrush}" BorderBrush="{DynamicResource CardBorderBrush}"
-                                        BorderThickness="1" CornerRadius="10" Padding="16" Margin="0,12,0,0">
+                                        BorderThickness="1" CornerRadius="12" Padding="16">
                                     <StackPanel>
                                         <TextBlock Text="Mức tín hiệu thời gian thực" FontWeight="Bold" FontSize="14" Margin="0,0,0,10"/>
-                                        <TextBlock Text="Loa PC -> Điện thoại" Foreground="{DynamicResource TextMutedBrush}" FontSize="12" Margin="0,0,0,4"/>
-                                        <ProgressBar x:Name="PbSpeakerLevel" Minimum="0" Maximum="100" Height="8" Margin="0,0,0,10"
+                                        <DockPanel Margin="0,0,0,4">
+                                            <TextBlock Text="Loa PC → Điện thoại" Foreground="{DynamicResource TextMutedBrush}" FontSize="12"/>
+                                        </DockPanel>
+                                        <ProgressBar x:Name="PbSpeakerLevel" Minimum="0" Maximum="100" Height="8" Margin="0,0,0,12"
                                                      Foreground="#38BDF8" Background="{DynamicResource CardBgBrush}" BorderThickness="0"/>
-                                        <TextBlock Text="Mic Điện thoại -> PC" Foreground="{DynamicResource TextMutedBrush}" FontSize="12" Margin="0,0,0,4"/>
+                                        <DockPanel Margin="0,0,0,4">
+                                            <TextBlock Text="Mic Điện thoại → PC" Foreground="{DynamicResource TextMutedBrush}" FontSize="12"/>
+                                        </DockPanel>
                                         <ProgressBar x:Name="PbMicLevel" Minimum="0" Maximum="100" Height="8"
                                                      Foreground="#4ADE80" Background="{DynamicResource CardBgBrush}" BorderThickness="0"/>
                                     </StackPanel>
@@ -311,6 +290,122 @@
                             </StackPanel>
                         </ScrollViewer>
                     </Border>
+
+                    <!-- TAB 3: BLUETOOTH ẢO & QUÉT BLUETOOTH -->
+                    <Grid x:Name="PanelBluetooth" Visibility="Collapsed">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+
+                        <!-- Card Bluetooth 5.2 Ảo + Nút Bluetooth Windows -->
+                        <Border Grid.Row="0" Background="{DynamicResource CardBgBrush}" BorderBrush="{DynamicResource CardBorderBrush}"
+                                BorderThickness="1" CornerRadius="14" Padding="18" Margin="0,0,0,12">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel VerticalAlignment="Center" Margin="0,0,14,0">
+                                    <TextBlock Text="BLUETOOTH ẢO TRÊN PC" FontSize="11" FontWeight="Bold" Foreground="{DynamicResource AccentCyanBrush}"/>
+                                    <TextBlock Text="Card Bluetooth 5.2 Ảo (BthUsb.sys)" FontSize="16" FontWeight="Bold" Margin="0,3,0,2"/>
+                                    <TextBlock Text="Tạo adapter Bluetooth ảo trên Windows để kết nối qua Bluetooth Windows (cài sẵn driver &amp; VB-CABLE)."
+                                               Foreground="{DynamicResource TextMutedBrush}" FontSize="12" TextWrapping="Wrap"/>
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                        <Button x:Name="BtnToggleVirtualBt" Content="Bật Card Bluetooth Ảo"
+                                                Style="{StaticResource PrimaryButtonStyle}" Margin="0,0,8,0" Click="OnToggleVirtualBtClick"/>
+                                        <Button Content="Bluetooth Windows" Style="{StaticResource SecondaryButtonStyle}" Click="OnOpenBtSettingsClick"/>
+                                    </StackPanel>
+                                    <Button x:Name="BtnInstallDriver" Content="Tự cài thành phần còn thiếu"
+                                            Style="{StaticResource SecondaryButtonStyle}" Margin="0,8,0,0"
+                                            HorizontalAlignment="Right" Click="OnInstallDriverClick"/>
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+
+                        <!-- Quét BLE 2.4GHz -->
+                        <Border Grid.Row="1" Background="{DynamicResource CardBgBrush}" BorderBrush="{DynamicResource CardBorderBrush}"
+                                BorderThickness="1" CornerRadius="14" Padding="20">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="*"/>
+                                </Grid.RowDefinitions>
+
+                                <Grid Grid.Row="0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="QUÉT BLUETOOTH (BLE 2.4GHZ)" FontSize="11.5" FontWeight="Bold" Foreground="{DynamicResource AccentCyanBrush}"/>
+                                        <TextBlock x:Name="TxtBleScanStatus" Text="Sẵn sàng — nhấn Quét để yêu cầu điện thoại quét thiết bị xung quanh"
+                                                   Foreground="{DynamicResource TextMutedBrush}" FontSize="12.5" Margin="0,4,0,0"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                        <CheckBox x:Name="ChkHideUnnamedBle" Content="Ẩn không tên / chỉ quảng bá"
+                                                  Foreground="{DynamicResource TextMutedBrush}" IsChecked="True"
+                                                  VerticalAlignment="Center" Margin="0,0,12,0"
+                                                  Checked="OnBleFilterChanged" Unchecked="OnBleFilterChanged"/>
+                                        <Button x:Name="BtnScanBle" Content="Quét Bluetooth" Style="{StaticResource PrimaryButtonStyle}"
+                                                Margin="0,0,8,0" Click="OnToggleBleScanClick"/>
+                                        <Button Content="Xóa danh sách" Style="{StaticResource SecondaryButtonStyle}" Click="OnClearBleListClick"/>
+                                    </StackPanel>
+                                </Grid>
+
+                                <ProgressBar x:Name="PbBleScanning" Grid.Row="1" IsIndeterminate="True" Height="4" Margin="0,10,0,4"
+                                             Foreground="{DynamicResource AccentCyanBrush}" Background="{DynamicResource SubCardBgBrush}"
+                                             BorderThickness="0" Visibility="Collapsed"/>
+
+                                <Border Grid.Row="2" Background="{DynamicResource SubCardBgBrush}" BorderBrush="{DynamicResource CardBorderBrush}"
+                                        BorderThickness="1" CornerRadius="10" Padding="8" Margin="0,8,0,0">
+                                    <Grid>
+                                        <TextBlock x:Name="TxtBleEmptyHint"
+                                                   Text="Chưa có thiết bị Bluetooth nào được phát hiện. Hãy kết nối điện thoại và bấm Quét Bluetooth."
+                                                   Foreground="{DynamicResource TextMutedBrush}" FontSize="13"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center" TextWrapping="Wrap"/>
+                                        <ListBox x:Name="LstBleDevices" Background="Transparent" Foreground="{DynamicResource TextPrimaryBrush}"
+                                                 BorderThickness="0" FontSize="12.5" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                                            <ListBox.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Border Background="{DynamicResource CardBgBrush}" BorderBrush="{DynamicResource CardBorderBrush}"
+                                                            BorderThickness="1" CornerRadius="8" Padding="12,9" Margin="2,3">
+                                                        <Grid>
+                                                            <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="*"/>
+                                                                <ColumnDefinition Width="Auto"/>
+                                                            </Grid.ColumnDefinitions>
+                                                            <StackPanel>
+                                                                <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" FontSize="13"/>
+                                                                <TextBlock Text="{Binding Subtitle}" Foreground="{DynamicResource TextMutedBrush}"
+                                                                           FontFamily="Consolas" FontSize="11.5" Margin="0,2,0,0"/>
+                                                            </StackPanel>
+                                                            <Border Grid.Column="1" Background="{DynamicResource SubCardBgBrush}" CornerRadius="6"
+                                                                    Padding="10,4" VerticalAlignment="Center">
+                                                                <TextBlock Text="{Binding RssiText}" Foreground="{Binding RssiBrush}"
+                                                                           FontFamily="Consolas" FontWeight="Bold" FontSize="12"/>
+                                                            </Border>
+                                                        </Grid>
+                                                    </Border>
+                                                </DataTemplate>
+                                            </ListBox.ItemTemplate>
+                                            <ListBox.ItemContainerStyle>
+                                                <Style TargetType="ListBoxItem">
+                                                    <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                                    <Setter Property="Padding" Value="0"/>
+                                                    <Setter Property="Background" Value="Transparent"/>
+                                                    <Setter Property="BorderThickness" Value="0"/>
+                                                </Style>
+                                            </ListBox.ItemContainerStyle>
+                                        </ListBox>
+                                    </Grid>
+                                </Border>
+                            </Grid>
+                        </Border>
+                    </Grid>
                 </Grid>
             </Grid>
 

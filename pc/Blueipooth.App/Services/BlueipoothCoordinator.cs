@@ -25,6 +25,7 @@ public sealed partial class BlueipoothCoordinator : IAsyncDisposable
     public bool IsConnectionPaused => LanServer.ConnectionsPaused;
     public bool IsBleScanning { get; private set; }
     public HeadsetStateMessage? AttachedHeadset { get; private set; }
+    public DeviceStatusMessage? LatestPhoneStatus { get; private set; }
     public string? SynthesizedStereoMac { get; private set; }
     public string? SynthesizedMicMac { get; private set; }
 
@@ -68,6 +69,18 @@ public sealed partial class BlueipoothCoordinator : IAsyncDisposable
                 SynthesizedMicMac = mic;
                 Log($"Dual-MAC Headset ready in Windows BT: Stereo={stereo}, HD Mic={mic ?? "N/A"}");
                 StateChanged?.Invoke();
+            };
+            int a2dpPktCount = 0;
+            Bumble.A2dpSbcPacketReceived += sbcPayload =>
+            {
+                if (CurrentAudioMode == "NativeA2dp" && LanServer.CurrentPhone is not null)
+                {
+                    if (Interlocked.Increment(ref a2dpPktCount) <= 2)
+                    {
+                        Log($"A2DP SBC packet #{a2dpPktCount}: {sbcPayload.Length}B, head={Convert.ToHexString(sbcPayload.AsSpan(0, Math.Min(6, sbcPayload.Length)))}");
+                    }
+                    AudioEngine.PushIncomingA2dpSbcPacket(sbcPayload);
+                }
             };
 
             await Bumble.StartAsync();
@@ -151,10 +164,10 @@ public sealed partial class BlueipoothCoordinator : IAsyncDisposable
 
         IsBleScanning = enable;
         Log(enable ? "Sending BLE scan START request to Android (15s timeout)..." : "Sending BLE scan STOP request to Android...");
+        StateChanged?.Invoke();
         await LanServer.SendControlMessageAsync(
             ControlMessageType.BleScanCmd,
-            new BleScanCmdMessage(Enable: enable, FilterDuplicates: false));
-        StateChanged?.Invoke();
+            new BleScanCmdMessage(Enable: enable, FilterDuplicates: false)).ConfigureAwait(false);
 
         if (enable)
         {
@@ -204,6 +217,7 @@ public sealed partial class BlueipoothCoordinator : IAsyncDisposable
                 Log("Android companion disconnected.");
                 IsBleScanning = false;
                 AttachedHeadset = null;
+                LatestPhoneStatus = null;
                 SynthesizedStereoMac = null;
                 SynthesizedMicMac = null;
             }
@@ -246,6 +260,12 @@ public sealed partial class BlueipoothCoordinator : IAsyncDisposable
             Log($"Executed media key from headset: {mc.Key}");
         };
 
+        LanServer.DeviceStatusReceived += ds =>
+        {
+            LatestPhoneStatus = ds;
+            StateChanged?.Invoke();
+        };
+
         LanServer.PhoneMicOpusFrameReceived += (opusBytes, hdr) =>
         {
             AudioEngine.PushIncomingPhoneMicOpusPacket(hdr.SequenceNumber, opusBytes.Span);
@@ -259,7 +279,7 @@ public sealed partial class BlueipoothCoordinator : IAsyncDisposable
 
     private void UpdateAudioCaptureState()
     {
-        bool shouldStreamDirect = LanServer.CurrentPhone is not null;
+        bool shouldStreamDirect = LanServer.CurrentPhone is not null && CurrentAudioMode == "GamingOpus";
         if (shouldStreamDirect && !AudioEngine.IsStreamingSpeaker)
         {
             try

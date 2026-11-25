@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
@@ -17,12 +19,41 @@ using QRCoder;
 
 namespace Blueipooth.App;
 
-public sealed class BleDeviceViewItem
+public sealed class BleDeviceViewItem : INotifyPropertyChanged
 {
-    public required string DisplayName { get; init; }
-    public required string Subtitle { get; init; }
-    public required string RssiText { get; init; }
-    public required System.Windows.Media.Brush RssiBrush { get; init; }
+    private string _displayName = "";
+    private string _subtitle = "";
+    private string _rssiText = "";
+    private System.Windows.Media.Brush _rssiBrush = System.Windows.Media.Brushes.LightGray;
+
+    public required string Address { get; init; }
+
+    public required string DisplayName
+    {
+        get => _displayName;
+        set { if (_displayName != value) { _displayName = value; OnChanged(nameof(DisplayName)); } }
+    }
+
+    public required string Subtitle
+    {
+        get => _subtitle;
+        set { if (_subtitle != value) { _subtitle = value; OnChanged(nameof(Subtitle)); } }
+    }
+
+    public required string RssiText
+    {
+        get => _rssiText;
+        set { if (_rssiText != value) { _rssiText = value; OnChanged(nameof(RssiText)); } }
+    }
+
+    public required System.Windows.Media.Brush RssiBrush
+    {
+        get => _rssiBrush;
+        set { if (!Equals(_rssiBrush, value)) { _rssiBrush = value; OnChanged(nameof(RssiBrush)); } }
+    }
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+    private void OnChanged(string prop) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(prop));
 }
 
 public partial class MainWindow : Window
@@ -31,6 +62,8 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _uiRefreshTimer;
     private readonly ConcurrentDictionary<string, BleAdvReportMessage> _bleDevices = new();
     private readonly ConcurrentDictionary<string, long> _bleFirstSeenOrder = new();
+    private readonly ObservableCollection<BleDeviceViewItem> _bleViewItems = new();
+    private readonly Dictionary<string, BleDeviceViewItem> _bleViewLookup = new();
     private readonly ConcurrentQueue<string> _pendingUiLogs = new();
     private long _bleOrderCounter;
     private AppSettings _settings = new();
@@ -38,12 +71,15 @@ public partial class MainWindow : Window
     private bool _isExplicitExit;
     private bool _uiInitialized;
     private int _bleListDirty;
+    private int _mediaTickCounter;
+    private CancellationTokenSource? _jitterDebounceCts;
     private double _latestSpeakerPeak;
     private double _latestMicPeak;
 
     public MainWindow()
     {
         InitializeComponent();
+        LstBleDevices.ItemsSource = _bleViewItems;
         LoadAndApplySettings();
         SetupSystemTray();
 
@@ -295,8 +331,8 @@ public partial class MainWindow : Window
             ? System.Windows.Media.Brushes.LightGreen
             : System.Windows.Media.Brushes.Gold;
         BtnToggleVirtualBt.Content = attached
-            ? "Ngắt Card Bluetooth Ảo khỏi Windows"
-            : "Bật Card Bluetooth Ảo trên Windows";
+            ? "Ngắt Card Bluetooth Ảo"
+            : "Bật Card Bluetooth Ảo";
 
         var phone = _coordinator.LanServer.CurrentPhone;
         BtnPauseConnection.Content = _coordinator.IsConnectionPaused ? "Tiếp tục kết nối" : "Tạm ngừng kết nối";
@@ -310,17 +346,61 @@ public partial class MainWindow : Window
             DotTopConn.Fill = new SolidColorBrush(System.Windows.Media.Color.FromRgb(74, 222, 128));
             TxtTopConnBadge.Text = $"Đã nối: {phone.DeviceName}";
 
-            double oneWayNetMs = phone.IsUsbLink ? 1.0 : Math.Max(1.0, phone.RttMs / 2.0);
+            TxtQrRouteChannel.Text = _coordinator.CurrentAudioMode == "NativeA2dp"
+                ? (attached ? "Kênh Bluetooth Ảo (Windows A2DP)" : "Kênh Bluetooth Ảo (Chưa bật Adapter)")
+                : $"Kênh IP trực tiếp ({(phone.IsUsbLink ? "Cáp USB" : "Wi-Fi/LAN")})";
+
+            var ds = _coordinator.LatestPhoneStatus;
+            string? btConnectedList = ds?.ConnectedBtDevices?.Trim();
+            if (ds is not null)
+            {
+                TxtPhoneBattery.Text = ds.BatteryPercent >= 0
+                    ? (ds.IsCharging ? $"{ds.BatteryPercent}% (Đang sạc)" : $"{ds.BatteryPercent}%")
+                    : "Không rõ";
+                TxtPhoneBtState.Text = ds.BluetoothEnabled ? "Đang bật" : "Đang tắt";
+                TxtPhoneBtState.Foreground = ds.BluetoothEnabled
+                    ? System.Windows.Media.Brushes.LightGreen
+                    : System.Windows.Media.Brushes.Orange;
+                TxtConnectedBtNames.Text = !string.IsNullOrEmpty(btConnectedList) ? btConnectedList : "Không có";
+                TxtConnectedBtNames.Foreground = !string.IsNullOrEmpty(btConnectedList)
+                    ? System.Windows.Media.Brushes.LightGreen
+                    : System.Windows.Media.Brushes.LightGray;
+                TxtPhoneMediaNow.Text = string.IsNullOrWhiteSpace(ds.MediaInfo) ? "Không có media đang phát" : ds.MediaInfo;
+            }
+            else
+            {
+                TxtPhoneBattery.Text = "Đang đọc...";
+                TxtPhoneBtState.Text = "Đang đọc...";
+                TxtPhoneBtState.Foreground = System.Windows.Media.Brushes.LightGray;
+                TxtConnectedBtNames.Text = "Đang đọc...";
+                TxtConnectedBtNames.Foreground = System.Windows.Media.Brushes.LightGray;
+                TxtPhoneMediaNow.Text = "Đang đồng bộ...";
+            }
+
+            double oneWayNetMs = phone.RttMs > 0 ? Math.Max(0.2, phone.RttMs / 2.0) : (phone.IsUsbLink ? 0.5 : 1.0);
             int bufMs = _coordinator.CurrentJitterBufferMs;
-            double totalAudioMs = oneWayNetMs + bufMs;
-            TxtAudioLatency.Text = $"~{totalAudioMs:0} ms (Mạng {oneWayNetMs:0.0}ms + Đệm {bufMs}ms)";
-            TxtAudioLatency.Foreground = System.Windows.Media.Brushes.LightSkyBlue;
+            const int frameProcMs = Blueipooth.Audio.WasapiOpusAudioEngine.FrameDurationMs; // 10ms
+
+            if (ds is { AudioActivelyPlaying: true })
+            {
+                double realTotalMs = oneWayNetMs + ds.AudioJitterMs + ds.AudioHardwareMs + frameProcMs;
+                TxtAudioLatency.Text = $"Đo thực tế: ~{realTotalMs:0.0} ms";
+                TxtAudioLatency.Foreground = System.Windows.Media.Brushes.LightGreen;
+                TxtQrAudioLatency.Text = $"Đo real-time: ~{realTotalMs:0.0} ms (Mạng {oneWayNetMs:0.0}ms + Đệm {ds.AudioJitterMs}ms + AudioTrack {ds.AudioHardwareMs}ms + Opus {frameProcMs}ms)";
+            }
+            else
+            {
+                double estTotalMs = oneWayNetMs + bufMs + frameProcMs;
+                TxtAudioLatency.Text = $"Mạng {oneWayNetMs:0.0} ms (Đệm {bufMs}ms)";
+                TxtAudioLatency.Foreground = System.Windows.Media.Brushes.LightSkyBlue;
+                TxtQrAudioLatency.Text = $"Mạng real-time: {oneWayNetMs:0.0} ms (RTT {phone.RttMs:0.0}ms) • Chờ phát âm thanh (Đệm {bufMs}ms)";
+            }
         }
         else
         {
             TxtPhoneStatus.Text = _coordinator.IsConnectionPaused
                 ? "Đang tạm ngừng kết nối"
-                : "Mở Blueipooth trên điện thoại rồi quét mã QR";
+                : "Mở Blueipooth trên điện thoại rồi quét mã";
             TxtPhoneStatus.Foreground = _coordinator.IsConnectionPaused
                 ? System.Windows.Media.Brushes.LightSkyBlue
                 : System.Windows.Media.Brushes.Gold;
@@ -331,7 +411,16 @@ public partial class MainWindow : Window
             DotTopConn.Fill = new SolidColorBrush(System.Windows.Media.Color.FromRgb(251, 191, 36));
             TxtTopConnBadge.Text = _coordinator.IsConnectionPaused ? "Đang tạm ngừng" : "Chờ kết nối điện thoại";
 
-            TxtAudioLatency.Text = "Chờ kết nối...";
+            TxtQrRouteChannel.Text = "Chờ kết nối điện thoại...";
+            TxtQrAudioLatency.Text = "Độ trễ thực tế: --";
+            TxtPhoneBattery.Text = "--";
+            TxtPhoneBtState.Text = "--";
+            TxtPhoneBtState.Foreground = System.Windows.Media.Brushes.LightGray;
+            TxtConnectedBtNames.Text = "--";
+            TxtConnectedBtNames.Foreground = System.Windows.Media.Brushes.LightGray;
+            TxtPhoneMediaNow.Text = "Chưa kết nối";
+
+            TxtAudioLatency.Text = "Chờ kết nối";
             TxtAudioLatency.Foreground = System.Windows.Media.Brushes.Gray;
         }
 
@@ -346,14 +435,23 @@ public partial class MainWindow : Window
                 ? $"Đang quét thiết bị BLE qua điện thoại... ({_bleDevices.Count} thiết bị)"
                 : $"Sẵn sàng — đã tìm thấy {_bleDevices.Count} thiết bị BLE";
 
-        if (_coordinator.AttachedHeadset is { Connected: true } hs)
+        string? realBtName = _coordinator.LatestPhoneStatus?.ConnectedBtDevices?.Split(',').FirstOrDefault()?.Trim();
+        if (!string.IsNullOrEmpty(realBtName))
+        {
+            TxtHeadsetName.Text = realBtName;
+            TxtPhoneAudioDevice.Text = realBtName;
+            TxtDualMac.Text = $"Stereo: {_coordinator.SynthesizedStereoMac ?? "..."} | Mic: {_coordinator.SynthesizedMicMac ?? "N/A"}";
+        }
+        else if (_coordinator.AttachedHeadset is { Connected: true } hs)
         {
             TxtHeadsetName.Text = hs.Name;
+            TxtPhoneAudioDevice.Text = hs.Name;
             TxtDualMac.Text = $"Stereo: {_coordinator.SynthesizedStereoMac ?? "..."} | Mic: {_coordinator.SynthesizedMicMac ?? "N/A"}";
         }
         else
         {
             TxtHeadsetName.Text = "Loa / Tai nghe trên Điện thoại";
+            TxtPhoneAudioDevice.Text = phone is not null ? "Loa điện thoại" : "Chưa kết nối";
             TxtDualMac.Text = "Tự tách Dual-MAC khi ĐT nối AirPods/Loa BT";
         }
     }
@@ -363,14 +461,21 @@ public partial class MainWindow : Window
         TxtHciCounters.Text = $"{_coordinator.UsbIp.TotalHciCommands} Cmd / {_coordinator.UsbIp.TotalHciEvents} Evt";
 
         double speakerPeak = Interlocked.Exchange(ref _latestSpeakerPeak, 0);
-        PbSpeakerLevel.Value = _coordinator.AudioEngine.IsStreamingSpeaker
+        bool speakerActive = _coordinator.AudioEngine.IsStreamingSpeaker ||
+                             (_coordinator.CurrentAudioMode == "NativeA2dp" && _coordinator.LanServer.CurrentPhone is not null);
+        PbSpeakerLevel.Value = speakerActive
             ? Math.Max(speakerPeak * 100.0, PbSpeakerLevel.Value * 0.55)
             : 0;
 
         double micPeak = Interlocked.Exchange(ref _latestMicPeak, 0);
         PbMicLevel.Value = Math.Max(micPeak * 100.0, PbMicLevel.Value * 0.55);
 
-        if (Interlocked.Exchange(ref _bleListDirty, 0) != 0)
+        if ((++_mediaTickCounter % 20) == 0)
+        {
+            TxtPcMediaNow.Text = Blueipooth.Audio.WasapiOpusAudioEngine.GetActivePcMediaSummary();
+        }
+
+        if ((_mediaTickCounter % 3) == 0 && Interlocked.Exchange(ref _bleListDirty, 0) != 0)
         {
             RefreshBleList();
         }
@@ -392,40 +497,76 @@ public partial class MainWindow : Window
         }
     }
 
-    private void RefreshBleList()
+    private void RefreshBleList(bool rebuildAll = false)
     {
         bool hideUnnamed = ChkHideUnnamedBle.IsChecked == true;
-        var items = _bleDevices.Values
+        var filtered = _bleDevices.Values
             .Where(d => !hideUnnamed || (!string.IsNullOrWhiteSpace(d.Name) && d.Connectable))
             .OrderBy(d => _bleFirstSeenOrder.GetValueOrDefault(d.Address, long.MaxValue))
             .Take(50)
-            .Select(item =>
-            {
-                string label = string.IsNullOrWhiteSpace(item.Name) ? "(Thiết bị BLE ẩn tên)" : item.Name;
-                string conn = item.Connectable ? "Có thể kết nối" : "Chỉ phát quảng bá";
-                System.Windows.Media.Brush rssiBrush = item.Rssi >= -65
-                    ? System.Windows.Media.Brushes.LightGreen
-                    : item.Rssi >= -80
-                        ? System.Windows.Media.Brushes.Gold
-                        : System.Windows.Media.Brushes.Salmon;
-                return new BleDeviceViewItem
-                {
-                    DisplayName = label,
-                    Subtitle = $"{item.Address} • {conn}",
-                    RssiText = $"{item.Rssi} dBm",
-                    RssiBrush = rssiBrush
-                };
-            })
             .ToList();
 
-        LstBleDevices.ItemsSource = items;
-        TxtBleEmptyHint.Visibility = items.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        if (rebuildAll)
+        {
+            _bleViewItems.Clear();
+            _bleViewLookup.Clear();
+        }
+
+        var activeAddrs = new HashSet<string>(filtered.Count);
+        foreach (var item in filtered)
+        {
+            activeAddrs.Add(item.Address);
+            string label = string.IsNullOrWhiteSpace(item.Name) ? "(Thiết bị BLE ẩn tên)" : item.Name;
+            string conn = item.Connectable ? "Có thể kết nối" : "Chỉ phát quảng bá";
+            System.Windows.Media.Brush rssiBrush = item.Rssi >= -65
+                ? System.Windows.Media.Brushes.LightGreen
+                : item.Rssi >= -80
+                    ? System.Windows.Media.Brushes.Gold
+                    : System.Windows.Media.Brushes.Salmon;
+            string rssiText = $"{item.Rssi} dBm";
+            string subtitle = $"{item.Address} • {conn}";
+
+            if (_bleViewLookup.TryGetValue(item.Address, out var existing))
+            {
+                existing.DisplayName = label;
+                existing.Subtitle = subtitle;
+                existing.RssiText = rssiText;
+                existing.RssiBrush = rssiBrush;
+            }
+            else
+            {
+                var viewItem = new BleDeviceViewItem
+                {
+                    Address = item.Address,
+                    DisplayName = label,
+                    Subtitle = subtitle,
+                    RssiText = rssiText,
+                    RssiBrush = rssiBrush
+                };
+                _bleViewLookup[item.Address] = viewItem;
+                _bleViewItems.Add(viewItem);
+            }
+        }
+
+        if (!rebuildAll && _bleViewItems.Count != filtered.Count)
+        {
+            for (int i = _bleViewItems.Count - 1; i >= 0; i--)
+            {
+                if (!activeAddrs.Contains(_bleViewItems[i].Address))
+                {
+                    _bleViewLookup.Remove(_bleViewItems[i].Address);
+                    _bleViewItems.RemoveAt(i);
+                }
+            }
+        }
+
+        TxtBleEmptyHint.Visibility = _bleViewItems.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void OnBleFilterChanged(object sender, RoutedEventArgs e)
     {
         if (!_uiInitialized) return;
-        RefreshBleList();
+        RefreshBleList(rebuildAll: true);
     }
 
     private async void OnToggleBleScanClick(object sender, RoutedEventArgs e)
@@ -447,7 +588,7 @@ public partial class MainWindow : Window
     {
         _bleDevices.Clear();
         _bleFirstSeenOrder.Clear();
-        RefreshBleList();
+        RefreshBleList(rebuildAll: true);
         RefreshUiState();
     }
 
@@ -563,11 +704,24 @@ public partial class MainWindow : Window
     private async void OnJitterSliderChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
         if (!_uiInitialized) return;
-        int bufMs = (int)e.NewValue;
+        int bufMs = (int)Math.Round(e.NewValue);
         TxtBufferVal.Text = $"{bufMs} ms";
-        string mode = RbGamingMode.IsChecked == true ? "GamingOpus" : "NativeA2dp";
-        bool mic = ChkMicBridge.IsChecked == true;
-        await _coordinator.SetAudioModeAsync(mode, mic, bufMs);
+
+        _jitterDebounceCts?.Cancel();
+        _jitterDebounceCts?.Dispose();
+        var cts = new CancellationTokenSource();
+        _jitterDebounceCts = cts;
+
+        try
+        {
+            await Task.Delay(180, cts.Token);
+            string mode = RbGamingMode.IsChecked == true ? "GamingOpus" : "NativeA2dp";
+            bool mic = ChkMicBridge.IsChecked == true;
+            await _coordinator.SetAudioModeAsync(mode, mic, bufMs);
+        }
+        catch (OperationCanceledException)
+        {
+        }
     }
 
     private void OnNoiseFilterChanged(object sender, RoutedEventArgs e)

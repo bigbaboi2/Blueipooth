@@ -21,6 +21,7 @@ public enum ControlMessageType : byte
     HeadsetState = 0x20,
     AudioConfig = 0x21,
     MediaControl = 0x22,
+    DeviceStatus = 0x23,
 }
 
 public sealed record PairHelloMessage(
@@ -77,6 +78,16 @@ public sealed record AudioConfigMessage(
 
 public sealed record MediaControlMessage(
     [property: JsonPropertyName("key")] string Key);
+
+public sealed record DeviceStatusMessage(
+    [property: JsonPropertyName("batteryPercent")] int BatteryPercent,
+    [property: JsonPropertyName("isCharging")] bool IsCharging,
+    [property: JsonPropertyName("bluetoothEnabled")] bool BluetoothEnabled,
+    [property: JsonPropertyName("mediaInfo")] string MediaInfo,
+    [property: JsonPropertyName("connectedBtDevices")] string? ConnectedBtDevices = null,
+    [property: JsonPropertyName("audioJitterMs")] int AudioJitterMs = 0,
+    [property: JsonPropertyName("audioHardwareMs")] int AudioHardwareMs = 0,
+    [property: JsonPropertyName("audioActivelyPlaying")] bool AudioActivelyPlaying = false);
 
 public static class ControlFrameCodec
 {

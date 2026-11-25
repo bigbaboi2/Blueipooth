@@ -49,6 +49,7 @@ public sealed class BlueipoothLanServer : IAsyncDisposable
     public event Action<BleAdvReportMessage>? BleAdvertisementReceived;
     public event Action<HeadsetStateMessage>? HeadsetStateReceived;
     public event Action<MediaControlMessage>? MediaControlReceived;
+    public event Action<DeviceStatusMessage>? DeviceStatusReceived;
     public event Action<ReadOnlyMemory<byte>, MediaPacketHeader>? PhoneMicOpusFrameReceived;
 
     public void SetConnectionsPaused(bool paused)
@@ -327,6 +328,9 @@ public sealed class BlueipoothLanServer : IAsyncDisposable
             case ControlMessageType.MediaControl:
                 MediaControlReceived?.Invoke(ControlFrameCodec.Deserialize<MediaControlMessage>(json));
                 break;
+            case ControlMessageType.DeviceStatus:
+                DeviceStatusReceived?.Invoke(ControlFrameCodec.Deserialize<DeviceStatusMessage>(json));
+                break;
         }
     }
 
@@ -336,7 +340,7 @@ public sealed class BlueipoothLanServer : IAsyncDisposable
         {
             long nowUs = (long)(Stopwatch.GetTimestamp() * 1_000_000.0 / Stopwatch.Frequency);
             await SendControlMessageAsync(ControlMessageType.Ping, new PingMessage(nowUs), ct).ConfigureAwait(false);
-            await Task.Delay(2000, ct).ConfigureAwait(false);
+            await Task.Delay(1000, ct).ConfigureAwait(false);
         }
     }
 

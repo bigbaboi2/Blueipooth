@@ -27,6 +27,7 @@ object ControlMessageType {
     const val HEADSET_STATE: Byte = 0x20
     const val AUDIO_CONFIG: Byte = 0x21
     const val MEDIA_CONTROL: Byte = 0x22
+    const val DEVICE_STATUS: Byte = 0x23
 }
 
 data class QrPairingInfo(

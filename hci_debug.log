@@ -1,8 +1,4 @@
-2026-11-26 03:09:02,259 [INFO] ipc_protocol: Control IPC server listening on 127.0.0.1:55051
-2026-11-26 03:09:02,259 [INFO] blueipooth.bumble: H4 HCI TCP server listening on 127.0.0.1:55052
-2026-11-26 03:09:02,267 [INFO] ipc_protocol: Control IPC client connected: ('127.0.0.1', 55053)
-2026-11-26 03:09:03,086 [INFO] blueipooth.bumble: USB/IP HCI Host bridge connected: ('127.0.0.1', 49259)
-2026-11-26 03:09:03,403 [INFO] virtual_headset: Attached Dual-MAC Headset 'M2101K6G': Stereo=B1:7E:A2:38:FB:01, Mic=B1:7E:FF:38:FB:02
-2026-11-26 03:09:03,496 [INFO] virtual_headset: Windows connected AVDTP A2DP signaling to virtual Stereo headset
-2026-11-26 03:09:12,377 [INFO] virtual_controller: Windows HCI_Inquiry: length=5, classic_peers=2
-2026-11-26 03:10:51,242 [INFO] virtual_headset: Windows A2DP RTP media stream active
+2026-11-26 04:28:09,044 [INFO] ipc_protocol: Control IPC server listening on 127.0.0.1:61729
+2026-11-26 04:28:09,044 [INFO] blueipooth.bumble: H4 HCI TCP server listening on 127.0.0.1:61730
+2026-11-26 04:28:09,052 [INFO] ipc_protocol: Control IPC client connected: ('127.0.0.1', 61731)
+2026-11-26 04:28:09,124 [INFO] virtual_headset: Attached Dual-MAC Headset 'M2101K6G': Stereo=B1:7E:A2:38:FB:01, Mic=B1:7E:FF:38:FB:02

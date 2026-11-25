@@ -26,6 +26,7 @@ public sealed class BumbleEngineHost : IAsyncDisposable
     public event Action<BleScanCmdMessage>? BleScanRequested;
     public event Action<BleAdvCmdMessage>? BleAdvertiseRequested;
     public event Action<string, string?>? DualMacHeadsetSynthesized;
+    public event Action<byte[]>? A2dpSbcPacketReceived;
     public event Action<string>? EngineLogLine;
 
     public BumbleEngineHost(string pythonExePath, string engineMainScriptPath)
@@ -184,6 +185,13 @@ public sealed class BumbleEngineHost : IAsyncDisposable
                             root.TryGetProperty("micMac", out var mm) && mm.ValueKind == JsonValueKind.String
                                 ? mm.GetString()
                                 : null);
+                        break;
+                    case "a2dp_sbc_packet":
+                        string? hex = root.TryGetProperty("payloadHex", out var ph) ? ph.GetString() : null;
+                        if (!string.IsNullOrEmpty(hex))
+                        {
+                            A2dpSbcPacketReceived?.Invoke(Convert.FromHexString(hex));
+                        }
                         break;
                 }
             }

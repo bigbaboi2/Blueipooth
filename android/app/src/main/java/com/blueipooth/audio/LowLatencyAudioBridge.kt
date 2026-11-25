@@ -8,6 +8,7 @@ import android.media.AudioDeviceInfo
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioRecord
+import android.media.AudioTimestamp
 import android.media.AudioTrack
 import android.media.MediaRecorder
 import android.os.Handler
@@ -74,6 +75,20 @@ class LowLatencyAudioBridge(
     @Volatile
     var currentHeadset: ConnectedHeadsetInfo = ConnectedHeadsetInfo(false, "Phone Speaker", "", true)
         private set
+
+    @Volatile
+    var measuredJitterQueueMs: Int = 0
+        private set
+
+    @Volatile
+    var measuredHardwarePipelineMs: Int = 0
+        private set
+
+    @Volatile
+    var isAudioActivelyPlaying: Boolean = false
+        private set
+
+    private var lastPlaybackActivityMs: Long = 0L
 
     private val deviceCallback = object : AudioDeviceCallback() {
         override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>?) = refreshBluetoothHeadset()
@@ -216,6 +231,9 @@ class LowLatencyAudioBridge(
         playbackThread = Thread({
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO)
             val pcmShort = ShortArray(STEREO_SAMPLES_PER_5MS)
+            val audioTs = AudioTimestamp()
+            var totalFramesWritten = 0L
+            var tsSampleCounter = 0
 
             while (running && !Thread.currentThread().isInterrupted) {
                 var nextOpus: ByteArray? = null
@@ -223,6 +241,7 @@ class LowLatencyAudioBridge(
 
                 synchronized(jitterLock) {
                     if (!jitterPrimed) {
+                        measuredJitterQueueMs = jitterFrames.size * 10
                         try {
                             (jitterLock as Object).wait(15L)
                         } catch (_: InterruptedException) {
@@ -230,6 +249,7 @@ class LowLatencyAudioBridge(
                         }
                     }
                     if (jitterPrimed) {
+                        measuredJitterQueueMs = jitterFrames.size * 10
                         val exact = jitterFrames.remove(expectedSeq)
                         if (exact != null) {
                             nextOpus = exact
@@ -251,10 +271,23 @@ class LowLatencyAudioBridge(
                             stereoDecoder.decode(null, 0, 0, pcmShort, 0, SAMPLES_PER_5MS, false)
                         }
                         if (decoded > 0) {
-                            track.write(pcmShort, 0, decoded * 2, AudioTrack.WRITE_BLOCKING)
+                            val writtenSamples = track.write(pcmShort, 0, decoded * 2, AudioTrack.WRITE_BLOCKING)
+                            if (writtenSamples > 0) {
+                                totalFramesWritten += writtenSamples / 2
+                                lastPlaybackActivityMs = System.currentTimeMillis()
+                                isAudioActivelyPlaying = true
+                                if ((++tsSampleCounter % 50) == 0 && track.getTimestamp(audioTs)) {
+                                    val queuedFrames = (totalFramesWritten - audioTs.framePosition).coerceIn(0L, SAMPLE_RATE.toLong())
+                                    measuredHardwarePipelineMs = (queuedFrames * 1000.0 / SAMPLE_RATE).toInt()
+                                }
+                            }
                         }
                     } catch (_: Exception) {
                     }
+                } else if (isAudioActivelyPlaying && System.currentTimeMillis() - lastPlaybackActivityMs > 500L) {
+                    isAudioActivelyPlaying = false
+                    measuredJitterQueueMs = 0
+                    measuredHardwarePipelineMs = 0
                 }
             }
         }, "Blueipooth-Playback").apply { start() }

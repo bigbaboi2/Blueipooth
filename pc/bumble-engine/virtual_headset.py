@@ -296,11 +296,22 @@ class DualMacVirtualHeadsetManager:
             sink = server.add_sink(codec_caps)
             logged_stream = False
 
-            def on_rtp_packet(_packet: avdtp.MediaPacket) -> None:
+            def on_rtp_packet(packet: avdtp.MediaPacket) -> None:
                 nonlocal logged_stream
                 if not logged_stream:
                     logged_stream = True
                     logger.info("Windows A2DP RTP media stream active")
+                if self.audio_mode == "NativeA2dp" and self.ipc_emit is not None:
+                    asyncio.get_running_loop().create_task(
+                        self.ipc_emit(
+                            {
+                                "type": "a2dp_sbc_packet",
+                                "seq": packet.sequence_number,
+                                "ts": packet.timestamp,
+                                "payloadHex": packet.payload.hex(),
+                            }
+                        )
+                    )
 
             sink.on("rtp_packet", on_rtp_packet)
 

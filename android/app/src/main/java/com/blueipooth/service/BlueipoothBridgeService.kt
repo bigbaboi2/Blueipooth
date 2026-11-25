@@ -5,10 +5,16 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothManager
+import android.bluetooth.BluetoothProfile
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ServiceInfo
+import android.media.AudioManager
 import android.net.wifi.WifiManager
+import android.os.BatteryManager
 import android.os.Binder
 import android.os.Build
 import android.os.Handler
@@ -73,6 +79,15 @@ class BlueipoothBridgeService : Service() {
     private val discoveredBleMap = ConcurrentHashMap<String, ScannedBleDevice>()
     private val bleSeqCounter = AtomicLong(0L)
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val statusSyncRunnable = object : Runnable {
+        override fun run() {
+            if (_uiState.value.isConnected) {
+                Thread { sendDeviceStatusToPc() }.start()
+            }
+            mainHandler.postDelayed(this, 5_000L)
+        }
+    }
+
     private val bleAutoStopRunnable = Runnable {
         if (bleProxy.isScanning) {
             bleProxy.setScanning(false)
@@ -81,6 +96,10 @@ class BlueipoothBridgeService : Service() {
 
     private var wifiLock: WifiManager.WifiLock? = null
     private var wakeLock: PowerManager.WakeLock? = null
+    @Volatile
+    private var a2dpProxy: BluetoothProfile? = null
+    @Volatile
+    private var hfpProxy: BluetoothProfile? = null
 
     private lateinit var bleProxy: BleRfProxyManager
     private lateinit var audioBridge: LowLatencyAudioBridge
@@ -165,6 +184,7 @@ class BlueipoothBridgeService : Service() {
                 if (connected) {
                     audioBridge.refreshBluetoothHeadset()
                     sendHeadsetStateToPc(audioBridge.currentHeadset)
+                    sendDeviceStatusToPc()
                     updateNotification("Đã kết nối: $pcName ($ep)")
                 } else {
                     bleProxy.stopAll()
@@ -198,6 +218,58 @@ class BlueipoothBridgeService : Service() {
 
         audioBridge.start()
         lanClient.startDiscoveryAndAutoReconnect()
+        initBluetoothProfileProxies()
+        mainHandler.postDelayed(statusSyncRunnable, 4_000L)
+    }
+
+    @android.annotation.SuppressLint("MissingPermission")
+    private fun initBluetoothProfileProxies() {
+        try {
+            val btMgr = getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager ?: return
+            val adapter = btMgr.adapter ?: return
+            val listener = object : BluetoothProfile.ServiceListener {
+                override fun onServiceConnected(profile: Int, proxy: BluetoothProfile?) {
+                    if (profile == BluetoothProfile.A2DP) a2dpProxy = proxy
+                    if (profile == BluetoothProfile.HEADSET) hfpProxy = proxy
+                    sendDeviceStatusToPc()
+                }
+
+                override fun onServiceDisconnected(profile: Int) {
+                    if (profile == BluetoothProfile.A2DP) a2dpProxy = null
+                    if (profile == BluetoothProfile.HEADSET) hfpProxy = null
+                }
+            }
+            adapter.getProfileProxy(this, listener, BluetoothProfile.A2DP)
+            adapter.getProfileProxy(this, listener, BluetoothProfile.HEADSET)
+        } catch (_: Exception) {
+        }
+    }
+
+    @android.annotation.SuppressLint("MissingPermission")
+    private fun getConnectedBtDeviceNames(): List<String> {
+        val names = linkedSetOf<String>()
+        try {
+            a2dpProxy?.connectedDevices?.forEach { dev ->
+                dev.name?.takeIf { it.isNotBlank() }?.let { names.add(it) }
+            }
+            hfpProxy?.connectedDevices?.forEach { dev ->
+                dev.name?.takeIf { it.isNotBlank() }?.let { names.add(it) }
+            }
+            if (names.isEmpty()) {
+                val btMgr = getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
+                btMgr?.adapter?.bondedDevices?.forEach { dev ->
+                    try {
+                        val m = dev.javaClass.getMethod("isConnected")
+                        if (m.invoke(dev) == true) {
+                            dev.name?.takeIf { it.isNotBlank() }?.let { names.add(it) }
+                        }
+                    } catch (_: Exception) {
+                    }
+                }
+            }
+        } catch (_: Exception) {
+        }
+        return names.toList()
     }
 
     fun pairWithQrUri(uri: String) {
@@ -233,6 +305,43 @@ class BlueipoothBridgeService : Service() {
     fun clearBleDevices() {
         discoveredBleMap.clear()
         _uiState.update { it.copy(bleDevices = emptyList(), bleDevicesFound = 0) }
+    }
+
+    private fun sendDeviceStatusToPc() {
+        if (!_uiState.value.isConnected) return
+        val batIntent = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        val level = batIntent?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+        val scale = batIntent?.getIntExtra(BatteryManager.EXTRA_SCALE, 100) ?: 100
+        val pct = if (level >= 0 && scale > 0) (level * 100) / scale else -1
+        val status = batIntent?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
+        val charging = status == BatteryManager.BATTERY_STATUS_CHARGING || status == BatteryManager.BATTERY_STATUS_FULL
+
+        val btMgr = getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
+        val btOn = btMgr?.adapter?.isEnabled == true
+        val connectedBtNames = getConnectedBtDeviceNames()
+
+        val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+        val activeBtName = connectedBtNames.firstOrNull()
+        val mediaInfo = when {
+            am?.isMusicActive == true && activeBtName != null ->
+                "Đang phát qua $activeBtName"
+            am?.isMusicActive == true && audioBridge.currentHeadset.connected ->
+                "Đang phát qua ${audioBridge.currentHeadset.name}"
+            am?.isMusicActive == true -> "Đang phát âm thanh trên điện thoại"
+            else -> "Không có media đang phát"
+        }
+
+        val json = JSONObject()
+            .put("batteryPercent", pct)
+            .put("isCharging", charging)
+            .put("bluetoothEnabled", btOn)
+            .put("connectedBtDevices", connectedBtNames.joinToString(", "))
+            .put("mediaInfo", mediaInfo)
+            .put("audioJitterMs", audioBridge.measuredJitterQueueMs)
+            .put("audioHardwareMs", audioBridge.measuredHardwarePipelineMs)
+            .put("audioActivelyPlaying", audioBridge.isAudioActivelyPlaying)
+            .toString()
+        lanClient.sendControlJson(ControlMessageType.DEVICE_STATUS, json)
     }
 
     private fun sendHeadsetStateToPc(hs: ConnectedHeadsetInfo) {
@@ -314,7 +423,14 @@ class BlueipoothBridgeService : Service() {
     override fun onBind(intent: Intent?): IBinder = binder
 
     override fun onDestroy() {
+        mainHandler.removeCallbacks(statusSyncRunnable)
         mainHandler.removeCallbacks(bleAutoStopRunnable)
+        try {
+            val btMgr = getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
+            a2dpProxy?.let { btMgr?.adapter?.closeProfileProxy(BluetoothProfile.A2DP, it) }
+            hfpProxy?.let { btMgr?.adapter?.closeProfileProxy(BluetoothProfile.HEADSET, it) }
+        } catch (_: Exception) {
+        }
         bleProxy.stopAll()
         audioBridge.stop()
         lanClient.stop()

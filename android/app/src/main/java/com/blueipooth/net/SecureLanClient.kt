@@ -131,6 +131,20 @@ class SecureLanClient(
         }
     }
 
+    private fun sendUdpKeepalivePunch() {
+        val sock = udpSocket ?: return
+        val dest = remoteMediaAddress ?: return
+        val cipher = mediaCipher ?: return
+        ioPool.execute {
+            try {
+                val punchHdr = MediaPacketHeader(MediaPacketHeader.STREAM_PHONE_MIC, 0x00, 0L, System.nanoTime() / 1000L)
+                val punchWire = cipher.encrypt(punchHdr, ByteArray(0), 0)
+                sock.send(DatagramPacket(punchWire, punchWire.size, dest))
+            } catch (_: Exception) {
+            }
+        }
+    }
+
     fun sendMicOpusFrame(opusBuf: ByteArray, length: Int) {
         val sock = udpSocket ?: return
         val dest = remoteMediaAddress ?: return
@@ -265,12 +279,7 @@ class SecureLanClient(
 
         // Send an authenticated 0-byte UDP keepalive so PC immediately learns our Wi-Fi IP
         // even when Control is running over USB Cable (127.0.0.1)!
-        try {
-            val punchHdr = MediaPacketHeader(MediaPacketHeader.STREAM_PHONE_MIC, 0x00, 0L, System.nanoTime() / 1000L)
-            val punchWire = mediaCipher!!.encrypt(punchHdr, ByteArray(0), 0)
-            udp.send(DatagramPacket(punchWire, punchWire.size, remoteMediaAddress))
-        } catch (_: Exception) {
-        }
+        sendUdpKeepalivePunch()
 
         onConnectionState(true, pcName, chosenIp, 0.0)
 
@@ -301,6 +310,7 @@ class SecureLanClient(
                     .put("remoteTimestampUs", System.nanoTime() / 1000L)
                     .toString()
                 sendControlJson(ControlMessageType.PONG, pong)
+                sendUdpKeepalivePunch()
             }
             ControlMessageType.PONG -> {
                 val obj = JSONObject(json)
