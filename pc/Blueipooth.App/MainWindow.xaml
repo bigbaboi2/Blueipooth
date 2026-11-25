@@ -1,0 +1,173 @@
+<Window x:Class="Blueipooth.App.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Blueipooth — Virtual Bluetooth 5.2 &amp; Low-Latency Audio/BLE Bridge"
+        Width="1120" Height="740" MinWidth="980" MinHeight="660"
+        WindowStartupLocation="CenterScreen"
+        Background="{StaticResource BgDarkBrush}"
+        Foreground="{StaticResource TextPrimaryBrush}">
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="210"/>
+        </Grid.RowDefinitions>
+
+        <!-- Header -->
+        <Grid Grid.Row="0" Margin="0,0,0,16">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+
+            <StackPanel Grid.Column="0">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="BLUEIPOOTH" FontSize="24" FontWeight="ExtraBold" Foreground="{StaticResource AccentCyanBrush}"/>
+                    <Border Background="#1E3A5F" CornerRadius="4" Padding="8,2" Margin="10,0,0,0" VerticalAlignment="Center">
+                        <TextBlock Text="v1.0 • BT 5.2 Virtual HCI + Opus 5ms" FontSize="11" Foreground="#7DD3FC"/>
+                    </Border>
+                </StackPanel>
+                <TextBlock Text="Biến mạng LAN / Wi-Fi / Cáp USB thành Card Bluetooth 5.2 thực thụ &amp; Cầu nối Tai nghe / BLE không cần Root"
+                           Foreground="{StaticResource TextMutedBrush}" FontSize="12.5" Margin="0,3,0,0" TextTrimming="CharacterEllipsis"/>
+            </StackPanel>
+
+            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="12,0,0,0">
+                <Button Content="Device Manager" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,8,0" Click="OnOpenDeviceManagerClick"/>
+                <Button Content="Bluetooth Settings" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,8,0" Click="OnOpenBtSettingsClick"/>
+                <Button Content="Ẩn xuống Tray" Style="{StaticResource SecondaryButtonStyle}" Click="OnMinimizeToTrayClick"/>
+            </StackPanel>
+        </Grid>
+
+        <!-- Main 3-Column Cards -->
+        <Grid Grid.Row="1" Margin="0,0,0,16">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="1.05*"/>
+                <ColumnDefinition Width="1.0*"/>
+                <ColumnDefinition Width="1.25*"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- Card 1: Virtual Bluetooth Card -->
+            <Border Grid.Column="0" Background="{StaticResource CardBgBrush}" BorderBrush="{StaticResource CardBorderBrush}"
+                    BorderThickness="1" CornerRadius="10" Padding="16" Margin="0,0,12,0">
+                <StackPanel>
+                    <TextBlock Text="1. Card Bluetooth Ảo (Windows)" FontSize="16" FontWeight="Bold"/>
+                    <TextBlock Text="Nạp driver BthUsb.sys gốc của Microsoft thông qua usbip-win2 chữ ký số WHQL."
+                               Foreground="{StaticResource TextMutedBrush}" FontSize="12" TextWrapping="Wrap" Margin="0,4,0,14"/>
+
+                    <Border Background="#0F172A" CornerRadius="8" Padding="12" Margin="0,0,0,12">
+                        <StackPanel>
+                            <DockPanel Margin="0,0,0,6">
+                                <TextBlock DockPanel.Dock="Right" x:Name="TxtDriverStatus" Text="Đang kiểm tra..." FontWeight="SemiBold"/>
+                                <TextBlock Text="Driver usbip-win2:" Foreground="{StaticResource TextMutedBrush}"/>
+                            </DockPanel>
+                            <DockPanel Margin="0,0,0,6">
+                                <TextBlock DockPanel.Dock="Right" x:Name="TxtAdapterStatus" Text="Chưa gắn" FontWeight="Bold" Foreground="#FBBF24"/>
+                                <TextBlock Text="Trạng thái BthUsb:" Foreground="{StaticResource TextMutedBrush}"/>
+                            </DockPanel>
+                            <DockPanel>
+                                <TextBlock DockPanel.Dock="Right" x:Name="TxtHciCounters" Text="0 Cmd / 0 Evt" Foreground="#38BDF8"/>
+                                <TextBlock Text="Lưu lượng gói HCI:" Foreground="{StaticResource TextMutedBrush}"/>
+                            </DockPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <Button x:Name="BtnToggleVirtualBt" Content="Bật Card Bluetooth Ảo trên Windows"
+                            Style="{StaticResource PrimaryButtonStyle}" Margin="0,0,0,8" Click="OnToggleVirtualBtClick"/>
+                    <Button x:Name="BtnInstallDriver" Content="Cài đặt Driver WHQL (usbip-win2)"
+                            Style="{StaticResource SecondaryButtonStyle}" Click="OnInstallDriverClick"/>
+                </StackPanel>
+            </Border>
+
+            <!-- Card 2: QR Pairing & Android Link -->
+            <Border Grid.Column="1" Background="{StaticResource CardBgBrush}" BorderBrush="{StaticResource CardBorderBrush}"
+                    BorderThickness="1" CornerRadius="10" Padding="16" Margin="0,0,12,0">
+                <StackPanel>
+                    <DockPanel>
+                        <Button DockPanel.Dock="Right" Content="Đổi QR" Style="{StaticResource SecondaryButtonStyle}" Padding="10,4"
+                                Click="OnRefreshQrClick"/>
+                        <TextBlock Text="2. Ghép Đôi Android" FontSize="16" FontWeight="Bold" VerticalAlignment="Center"/>
+                    </DockPanel>
+
+                    <Border Background="White" CornerRadius="8" Width="170" Height="170" Padding="8" Margin="0,12,0,10" HorizontalAlignment="Center">
+                        <Image x:Name="ImgQrCode" Stretch="Uniform" RenderOptions.BitmapScalingMode="NearestNeighbor"/>
+                    </Border>
+
+                    <TextBlock x:Name="TxtPhoneStatus" Text="Chưa kết nối — Quét QR bằng App Blueipooth"
+                               FontWeight="SemiBold" Foreground="#FBBF24" HorizontalAlignment="Center" TextWrapping="Wrap" TextAlignment="Center"/>
+                    <TextBlock x:Name="TxtCandidateIps" Text="IPs: ..." Foreground="{StaticResource TextMutedBrush}"
+                               FontSize="11.5" HorizontalAlignment="Center" Margin="0,4,0,0" TextWrapping="Wrap" TextAlignment="Center"/>
+                </StackPanel>
+            </Border>
+
+            <!-- Card 3: Smart Dual-Mode Audio & Mic Bridge -->
+            <Border Grid.Column="2" Background="{StaticResource CardBgBrush}" BorderBrush="{StaticResource CardBorderBrush}"
+                    BorderThickness="1" CornerRadius="10" Padding="16">
+                <StackPanel>
+                    <TextBlock Text="3. Cầu Nối Tai Nghe / Loa / Mic" FontSize="16" FontWeight="Bold"/>
+                    <TextBlock Text="Tách Dual-MAC chống rè tiếng Stereo khi bật Mic Discord + Luồng Gaming Opus 5ms."
+                               Foreground="{StaticResource TextMutedBrush}" FontSize="12" TextWrapping="Wrap" Margin="0,4,0,12"/>
+
+                    <Border Background="#0F172A" CornerRadius="8" Padding="10" Margin="0,0,0,12">
+                        <StackPanel>
+                            <DockPanel Margin="0,0,0,4">
+                                <TextBlock DockPanel.Dock="Right" x:Name="TxtHeadsetName" Text="Loa/Tai nghe ĐT" FontWeight="Bold" Foreground="#4ADE80"/>
+                                <TextBlock Text="Thiết bị trên ĐT:" Foreground="{StaticResource TextMutedBrush}"/>
+                            </DockPanel>
+                            <DockPanel Margin="0,0,0,4">
+                                <TextBlock DockPanel.Dock="Right" x:Name="TxtDualMac" Text="Tự tách khi đeo tai nghe BT" Foreground="{StaticResource TextMutedBrush}" FontSize="11"/>
+                                <TextBlock Text="Dual-MAC Ảo:" Foreground="{StaticResource TextMutedBrush}" FontSize="11"/>
+                            </DockPanel>
+                            <DockPanel>
+                                <TextBlock DockPanel.Dock="Right" x:Name="TxtAudioLatency" Text="Chờ kết nối..." Foreground="#38BDF8" FontSize="11" FontWeight="SemiBold"/>
+                                <TextBlock Text="Độ trễ âm thanh:" Foreground="{StaticResource TextMutedBrush}" FontSize="11"/>
+                            </DockPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <TextBlock Text="Chế độ đường truyền âm thanh:" FontSize="12" Foreground="{StaticResource TextMutedBrush}" Margin="0,0,0,6"/>
+                    <RadioButton x:Name="RbGamingMode" Content="Gaming / Discord Siêu Trễ Thấp (WASAPI -> Opus 5ms)"
+                                 Foreground="White" IsChecked="True" Margin="0,0,0,6" Checked="OnAudioModeChanged"/>
+                    <RadioButton x:Name="RbNativeA2dpMode" Content="Native Windows Bluetooth A2DP (Qua BthA2dp.sys)"
+                                 Foreground="White" Margin="0,0,0,10" Checked="OnAudioModeChanged"/>
+
+                    <CheckBox x:Name="ChkMicBridge" Content="Bật đường truyền Mic 2 chiều về PC (Không tụt Stereo)"
+                              Foreground="#7DD3FC" IsChecked="False" Margin="0,0,0,4" Checked="OnAudioModeChanged" Unchecked="OnAudioModeChanged"/>
+                    <CheckBox x:Name="ChkMicNoiseFilter" Content="Lọc tiếng ồn gió/phím &amp; Tăng âm lượng Mic (+7dB)"
+                              Foreground="#94A3B8" IsChecked="True" Margin="0,0,0,10" Checked="OnNoiseFilterChanged" Unchecked="OnNoiseFilterChanged"/>
+
+                    <TextBlock Text="Âm lượng Loa PC -> Điện thoại / Tai nghe:" FontSize="11" Foreground="{StaticResource TextMutedBrush}"/>
+                    <ProgressBar x:Name="PbSpeakerLevel" Minimum="0" Maximum="100" Height="8" Margin="0,3,0,8" Foreground="#38BDF8" Background="#0F172A" BorderThickness="0"/>
+
+                    <TextBlock Text="Âm lượng Mic Điện thoại / Tai nghe -> PC:" FontSize="11" Foreground="{StaticResource TextMutedBrush}"/>
+                    <ProgressBar x:Name="PbMicLevel" Minimum="0" Maximum="100" Height="8" Margin="0,3,0,0" Foreground="#4ADE80" Background="#0F172A" BorderThickness="0"/>
+                </StackPanel>
+            </Border>
+        </Grid>
+
+        <!-- Bottom: BLE 2.4GHz Radar + System Log -->
+        <Grid Grid.Row="2">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="1*"/>
+                <ColumnDefinition Width="1.2*"/>
+            </Grid.ColumnDefinitions>
+
+            <Border Grid.Column="0" Background="{StaticResource CardBgBrush}" BorderBrush="{StaticResource CardBorderBrush}"
+                    BorderThickness="1" CornerRadius="10" Padding="12" Margin="0,0,12,0">
+                <DockPanel>
+                    <TextBlock DockPanel.Dock="Top" Text="Radar Sóng BLE 2.4GHz Thật (Quét qua Android)" FontWeight="Bold" Margin="0,0,0,6"/>
+                    <ListBox x:Name="LstBleDevices" Background="#0F172A" Foreground="#E2E8F0" BorderThickness="0" FontFamily="Consolas" FontSize="11.5"/>
+                </DockPanel>
+            </Border>
+
+            <Border Grid.Column="1" Background="{StaticResource CardBgBrush}" BorderBrush="{StaticResource CardBorderBrush}"
+                    BorderThickness="1" CornerRadius="10" Padding="12">
+                <DockPanel>
+                    <TextBlock DockPanel.Dock="Top" Text="Nhật ký Hoạt động Hệ thống" FontWeight="Bold" Margin="0,0,0,6"/>
+                    <TextBox x:Name="TxtLogs" Background="#0F172A" Foreground="#94A3B8" BorderThickness="0"
+                             IsReadOnly="True" VerticalScrollBarVisibility="Auto" TextWrapping="Wrap"
+                             FontFamily="Consolas" FontSize="11.5"/>
+                </DockPanel>
+            </Border>
+        </Grid>
+    </Grid>
+</Window>

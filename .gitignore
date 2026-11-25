@@ -1,0 +1,22 @@
+# Local isolated toolchains
+.tools/
+
+# .NET build artifacts
+**/bin/
+**/obj/
+*.user
+*.suo
+.vs/
+
+# Python artifacts
+**/__pycache__/
+**/*.pyc
+.pytest_cache/
+
+# Android Gradle artifacts
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+*.iml
+.idea/

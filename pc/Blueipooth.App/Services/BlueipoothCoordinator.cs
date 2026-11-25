@@ -1,0 +1,287 @@
+using System.IO;
+using System.Runtime.InteropServices;
+using Blueipooth.Audio;
+using Blueipooth.Protocol.Control;
+using Blueipooth.Protocol.Discovery;
+using Blueipooth.Protocol.Pairing;
+using Blueipooth.Protocol.Transport;
+using Blueipooth.UsbIp;
+
+namespace Blueipooth.App.Services;
+
+/// <summary>
+/// Central coordinator wiring USB/IP Server, Bumble 5.2 Engine, Secure LAN/USB Server, and WASAPI Opus Audio.
+/// </summary>
+public sealed partial class BlueipoothCoordinator : IAsyncDisposable
+{
+    public UsbIpServer UsbIp { get; }
+    public BumbleEngineHost? Bumble { get; private set; }
+    public BlueipoothLanServer LanServer { get; }
+    public NetworkDiscoveryService Discovery { get; }
+    public WasapiOpusAudioEngine AudioEngine { get; }
+
+    public string CurrentAudioMode { get; private set; } = "GamingOpus"; // "GamingOpus" | "NativeA2dp"
+    public HeadsetStateMessage? AttachedHeadset { get; private set; }
+    public string? SynthesizedStereoMac { get; private set; }
+    public string? SynthesizedMicMac { get; private set; }
+
+    public event Action<string>? LogAdded;
+    public event Action? StateChanged;
+    public event Action<BleAdvReportMessage>? BleDeviceDiscovered;
+
+    public BlueipoothCoordinator()
+    {
+        UsbIp = new UsbIpServer(listenPort: 3240, h4Host: "127.0.0.1", h4Port: 49552);
+        LanServer = new BlueipoothLanServer(controlPort: 49550, mediaUdpPort: 49551);
+        Discovery = new NetworkDiscoveryService(
+            Environment.MachineName,
+            LanServer.ControlPort,
+            LanServer.MediaUdpPort,
+            LanServer.CertSha256Hex,
+            FindRepoToolPath(@".tools\android-sdk\platform-tools\adb.exe"));
+        AudioEngine = new WasapiOpusAudioEngine();
+
+        WireEvents();
+    }
+
+    public async Task InitializeAsync()
+    {
+        LanServer.Start();
+        Discovery.Start();
+        Log($"LAN/USB Server listening on TLS :{LanServer.ControlPort}, UDP :{LanServer.MediaUdpPort}");
+
+        string? pyExe = FindRepoToolPath(@".tools\python\python.exe");
+        string? bumbleMain = FindRepoFilePath(@"pc\bumble-engine\main.py");
+
+        if (pyExe is not null && bumbleMain is not null)
+        {
+            Bumble = new BumbleEngineHost(pyExe, bumbleMain);
+            Bumble.EngineLogLine += line => Log($"[Bumble] {line}");
+            Bumble.BleScanRequested += OnBumbleBleScanRequested;
+            Bumble.BleAdvertiseRequested += OnBumbleBleAdvRequested;
+            Bumble.DualMacHeadsetSynthesized += (stereo, mic) =>
+            {
+                SynthesizedStereoMac = stereo;
+                SynthesizedMicMac = mic;
+                Log($"Dual-MAC Headset ready in Windows BT: Stereo={stereo}, HD Mic={mic ?? "N/A"}");
+                StateChanged?.Invoke();
+            };
+
+            await Bumble.StartAsync(49552, 49553);
+            UsbIp.UpdateH4Port(Bumble.H4Port);
+            Log("Bumble Bluetooth 5.2 Virtual Controller started.");
+        }
+        else
+        {
+            Log("Warning: Portable Python or bumble-engine/main.py not found. Run scripts/setup-dev.ps1.");
+        }
+
+        UsbIp.Start();
+        Log($"Local USB/IP Bluetooth Server active at 127.0.0.1:{UsbIp.ListenPort} (BusID {BluetoothUsbDescriptors.BusId}).");
+        StateChanged?.Invoke();
+    }
+
+    public async Task<(bool Ok, string Message)> SetVirtualBluetoothCardEnabledAsync(bool enable)
+    {
+        if (enable)
+        {
+            var res = await UsbipWin2Manager.AttachVirtualBluetoothAsync(UsbIp.ListenPort);
+            Log(res.Success ? $"Virtual BT Attached: {res.Output}" : $"Attach failed: {res.Output}");
+            StateChanged?.Invoke();
+            return res;
+        }
+        else
+        {
+            await UsbipWin2Manager.DetachAllLocalVirtualDevicesAsync();
+            Log("Detached Virtual Bluetooth Adapter.");
+            StateChanged?.Invoke();
+            return (true, "Detached");
+        }
+    }
+
+    public async Task SetAudioModeAsync(string mode, bool micEnabled)
+    {
+        CurrentAudioMode = mode;
+        AudioEngine.IsMicEnabled = micEnabled;
+
+        if (Bumble is not null)
+        {
+            await Bumble.SetAudioModeAsync(mode);
+        }
+
+        UpdateAudioCaptureState();
+
+        await LanServer.SendControlMessageAsync(ControlMessageType.AudioConfig, new AudioConfigMessage(
+            Mode: mode,
+            SampleRate: WasapiOpusAudioEngine.TargetSampleRate,
+            Channels: WasapiOpusAudioEngine.StereoChannels,
+            FrameMs: WasapiOpusAudioEngine.FrameDurationMs,
+            MicEnabled: micEnabled));
+
+        StateChanged?.Invoke();
+    }
+
+    public QrPairingPayload GetPairingQrPayload() => LanServer.GenerateCurrentQrPayload();
+
+    private void WireEvents()
+    {
+        UsbIp.DriverAttachmentChanged += attached =>
+        {
+            Log(attached
+                ? "Windows BthUsb.sys connected to Virtual Bluetooth 5.2 Adapter!"
+                : "Windows BthUsb.sys disconnected.");
+            StateChanged?.Invoke();
+        };
+
+        LanServer.PhoneRttUpdated += _ => StateChanged?.Invoke();
+
+        LanServer.PhoneConnectionChanged += phone =>
+        {
+            if (phone is not null)
+            {
+                string linkKind = phone.IsUsbLink ? "USB Cable (~1ms)" : "Wi-Fi / LAN";
+                Log($"Connected to Android '{phone.DeviceName}' ({phone.RemoteIp}) via {linkKind}.");
+                _ = LanServer.SendControlMessageAsync(ControlMessageType.AudioConfig, new AudioConfigMessage(
+                    CurrentAudioMode, 48000, 2, 5, AudioEngine.IsMicEnabled));
+            }
+            else
+            {
+                Log("Android companion disconnected.");
+                AttachedHeadset = null;
+                SynthesizedStereoMac = null;
+                SynthesizedMicMac = null;
+            }
+            UpdateAudioCaptureState();
+            StateChanged?.Invoke();
+        };
+
+        LanServer.BleAdvertisementReceived += adv =>
+        {
+            BleDeviceDiscovered?.Invoke(adv);
+            if (Bumble is not null)
+            {
+                _ = Bumble.InjectBleAdvertisementAsync(adv);
+            }
+        };
+
+        LanServer.HeadsetStateReceived += hs =>
+        {
+            bool wasConnected = AttachedHeadset?.Connected == true;
+            AttachedHeadset = hs.Connected ? hs : null;
+            if (hs.Connected)
+            {
+                Log($"Android bridged Bluetooth audio device: '{hs.Name}' ({hs.Mac})");
+            }
+            else if (wasConnected)
+            {
+                Log("Bluetooth audio device disconnected on Android.");
+            }
+            if (Bumble is not null)
+            {
+                _ = Bumble.UpdateHeadsetStateAsync(hs);
+            }
+            UpdateAudioCaptureState();
+            StateChanged?.Invoke();
+        };
+
+        LanServer.MediaControlReceived += mc =>
+        {
+            EmulateWindowsMediaKey(mc.Key);
+            Log($"Executed media key from headset: {mc.Key}");
+        };
+
+        LanServer.PhoneMicOpusFrameReceived += (opusBytes, hdr) =>
+        {
+            AudioEngine.PushIncomingPhoneMicOpusPacket(hdr.SequenceNumber, opusBytes.Span);
+        };
+
+        AudioEngine.EncodedStereoOpusFrameReady += opusBytes =>
+        {
+            if (CurrentAudioMode == "GamingOpus")
+            {
+                LanServer.SendPcStereoOpusFrame(opusBytes.Span, gamingDirect: true);
+            }
+        };
+    }
+
+    private void UpdateAudioCaptureState()
+    {
+        bool shouldStreamDirect = LanServer.CurrentPhone is not null && CurrentAudioMode == "GamingOpus";
+        if (shouldStreamDirect && !AudioEngine.IsStreamingSpeaker)
+        {
+            try
+            {
+                AudioEngine.StartSpeakerCapture();
+                Log("Started WASAPI 48kHz Opus 5ms ultra-low-latency audio stream.");
+            }
+            catch (Exception ex)
+            {
+                Log($"WASAPI capture warning: {ex.Message}");
+            }
+        }
+        else if (!shouldStreamDirect && AudioEngine.IsStreamingSpeaker)
+        {
+            AudioEngine.StopSpeakerCapture();
+        }
+    }
+
+    private void OnBumbleBleScanRequested(BleScanCmdMessage cmd)
+    {
+        Log($"Windows requested BLE 2.4GHz Scan: {(cmd.Enable ? "START" : "STOP")}");
+        _ = LanServer.SendControlMessageAsync(ControlMessageType.BleScanCmd, cmd);
+    }
+
+    private void OnBumbleBleAdvRequested(BleAdvCmdMessage cmd)
+    {
+        Log($"Windows requested BLE 2.4GHz Advertise: {(cmd.Enable ? "START" : "STOP")} ({cmd.AdvDataHex.Length / 2}B)");
+        _ = LanServer.SendControlMessageAsync(ControlMessageType.BleAdvCmd, cmd);
+    }
+
+    private void Log(string message) =>
+        LogAdded?.Invoke($"[{DateTime.Now:HH:mm:ss}] {message}");
+
+    private static string? FindRepoFilePath(string relativePath)
+    {
+        DirectoryInfo? dir = new(AppContext.BaseDirectory);
+        for (int i = 0; i < 7 && dir is not null; i++, dir = dir.Parent)
+        {
+            string candidate = Path.Combine(dir.FullName, relativePath);
+            if (File.Exists(candidate)) return candidate;
+        }
+        return null;
+    }
+
+    private static string? FindRepoToolPath(string relativePath) => FindRepoFilePath(relativePath);
+
+    [LibraryImport("user32.dll")]
+    private static partial void keybd_event(byte bVk, byte bScan, uint dwFlags, nuint dwExtraInfo);
+
+    private static void EmulateWindowsMediaKey(string key)
+    {
+        byte vk = key.ToUpperInvariant() switch
+        {
+            "PLAY_PAUSE" => 0xB3, // VK_MEDIA_PLAY_PAUSE
+            "NEXT" => 0xB0,       // VK_MEDIA_NEXT_TRACK
+            "PREV" => 0xB1,       // VK_MEDIA_PREV_TRACK
+            "VOL_UP" => 0xAF,     // VK_VOLUME_UP
+            "VOL_DOWN" => 0xAE,   // VK_VOLUME_DOWN
+            _ => 0
+        };
+        if (vk == 0) return;
+        keybd_event(vk, 0, 0, 0);
+        keybd_event(vk, 0, 0x0002, 0); // KEYEVENTF_KEYUP
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        AudioEngine.Dispose();
+        await UsbipWin2Manager.DetachAllLocalVirtualDevicesAsync();
+        await Discovery.DisposeAsync();
+        await LanServer.DisposeAsync();
+        await UsbIp.DisposeAsync();
+        if (Bumble is not null)
+        {
+            await Bumble.DisposeAsync();
+        }
+    }
+}
