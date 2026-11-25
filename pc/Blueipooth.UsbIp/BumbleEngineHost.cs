@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Blueipooth.Protocol.Control;
 
 namespace Blueipooth.UsbIp;
@@ -18,8 +19,8 @@ public sealed class BumbleEngineHost : IAsyncDisposable
     private StreamWriter? _ipcWriter;
     private CancellationTokenSource? _cts;
 
-    public int H4Port { get; private set; } = 49552;
-    public int IpcPort { get; private set; } = 49553;
+    public int H4Port { get; private set; }
+    public int IpcPort { get; private set; }
     public bool IsRunning => _process is { HasExited: false };
 
     public event Action<BleScanCmdMessage>? BleScanRequested;
@@ -33,7 +34,7 @@ public sealed class BumbleEngineHost : IAsyncDisposable
         _engineMainScriptPath = engineMainScriptPath;
     }
 
-    public async Task StartAsync(int h4Port = 49552, int ipcPort = 49553, CancellationToken ct = default)
+    public async Task StartAsync(int h4Port = 0, int ipcPort = 0, CancellationToken ct = default)
     {
         if (IsRunning) return;
         H4Port = h4Port;
@@ -59,6 +60,16 @@ public sealed class BumbleEngineHost : IAsyncDisposable
             EngineLogLine?.Invoke(e.Data);
             if (e.Data.Contains("BLUEIPOOTH_BUMBLE_READY", StringComparison.Ordinal))
             {
+                Match ports = Regex.Match(e.Data, @"H4=(\d+)\s+IPC=(\d+)");
+                if (!ports.Success)
+                {
+                    readyTcs.TrySetException(new InvalidOperationException(
+                        $"Bumble reported ready without valid ports: {e.Data}"));
+                    return;
+                }
+
+                H4Port = int.Parse(ports.Groups[1].Value);
+                IpcPort = int.Parse(ports.Groups[2].Value);
                 readyTcs.TrySetResult(true);
             }
         };
@@ -66,6 +77,12 @@ public sealed class BumbleEngineHost : IAsyncDisposable
         {
             if (!string.IsNullOrWhiteSpace(e.Data))
                 EngineLogLine?.Invoke(e.Data);
+        };
+        _process.Exited += (_, _) =>
+        {
+            if (!readyTcs.Task.IsCompleted)
+                readyTcs.TrySetException(new InvalidOperationException(
+                    $"Bumble engine exited before becoming ready (exit code {_process.ExitCode}). See the [Bumble] traceback in the activity log."));
         };
 
         _process.Start();

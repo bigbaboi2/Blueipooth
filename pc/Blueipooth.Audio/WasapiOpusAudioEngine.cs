@@ -1,18 +1,12 @@
 using Concentus;
 using Concentus.Enums;
 using NAudio.CoreAudioApi;
+using NAudio.CoreAudioApi.Interfaces;
 using NAudio.Wave;
 
 namespace Blueipooth.Audio;
 
-/// <summary>
-/// Real-time 48kHz Low-Latency Audio Engine:
-/// - Captures Windows speaker audio via WASAPI Loopback, normalizes/resamples to 48kHz Stereo,
-///   and encodes 5ms (240 samples/ch) Opus frames using Concentus RESTRICTED_LOWDELAY.
-/// - Decodes incoming 48kHz Phone Mic Opus frames via AdaptiveJitterBuffer + PLC, routing automatically
-///   to a Virtual Audio Cable ("CABLE Input") if present and exposing live RMS meters.
-/// </summary>
-public sealed class WasapiOpusAudioEngine : IDisposable
+public sealed class WasapiOpusAudioEngine : IDisposable, IMMNotificationClient
 {
     public const int TargetSampleRate = 48000;
     public const int StereoChannels = 2;
@@ -25,6 +19,9 @@ public sealed class WasapiOpusAudioEngine : IDisposable
     private readonly AdaptiveJitterBuffer _micJitterBuffer = new(targetDepthFrames: 3, maxDepthFrames: 8);
 
     private WasapiLoopbackCapture? _loopbackCapture;
+    private MMDeviceEnumerator? _deviceEnumerator;
+    private string? _currentRenderDeviceId;
+    private readonly object _captureLock = new();
     private WasapiOut? _virtualMicRenderOut;
     private BufferedWaveProvider? _virtualMicWaveBuffer;
 
@@ -37,6 +34,28 @@ public sealed class WasapiOpusAudioEngine : IDisposable
     public bool IsMicNoiseFilterEnabled { get; set; } = true;
     public float MicGainBoost { get; set; } = 2.2f;
     public string? ActiveVirtualMicEndpointName { get; private set; }
+
+    public static bool IsVirtualMicCableInstalled
+    {
+        get
+        {
+            try
+            {
+                using var enumerator = new MMDeviceEnumerator();
+                bool hasCableInput = enumerator
+                    .EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active)
+                    .Any(d => d.FriendlyName.Contains("CABLE Input", StringComparison.OrdinalIgnoreCase));
+                bool hasCableOutput = enumerator
+                    .EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active)
+                    .Any(d => d.FriendlyName.Contains("CABLE Output", StringComparison.OrdinalIgnoreCase));
+                return hasCableInput && hasCableOutput;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+    }
 
     private float _hpPrevIn;
     private float _hpPrevOut;
@@ -61,23 +80,52 @@ public sealed class WasapiOpusAudioEngine : IDisposable
 
     public void StartSpeakerCapture()
     {
-        if (IsStreamingSpeaker) return;
+        lock (_captureLock)
+        {
+            if (IsStreamingSpeaker) return;
 
+            if (_deviceEnumerator is null)
+            {
+                _deviceEnumerator = new MMDeviceEnumerator();
+                try { _deviceEnumerator.RegisterEndpointNotificationCallback(this); } catch { }
+            }
+
+            StartLoopbackInternal();
+            TryAttachVirtualMicCableEndpoint();
+        }
+    }
+
+    private void StartLoopbackInternal()
+    {
         _accumCount = 0;
-        _loopbackCapture = new WasapiLoopbackCapture();
+        using var defaultDev = _deviceEnumerator?.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
+        _currentRenderDeviceId = defaultDev?.ID;
+        _loopbackCapture = defaultDev is not null
+            ? new WasapiLoopbackCapture(defaultDev)
+            : new WasapiLoopbackCapture();
         _loopbackCapture.DataAvailable += OnWasapiDataAvailable;
-        _loopbackCapture.RecordingStopped += (_, _) => IsStreamingSpeaker = false;
+        _loopbackCapture.RecordingStopped += (_, _) => { };
         _loopbackCapture.StartRecording();
         IsStreamingSpeaker = true;
-
-        TryAttachVirtualMicCableEndpoint();
     }
 
     public void StopSpeakerCapture()
     {
-        if (!IsStreamingSpeaker) return;
-        IsStreamingSpeaker = false;
+        lock (_captureLock)
+        {
+            if (!IsStreamingSpeaker) return;
+            IsStreamingSpeaker = false;
+            StopLoopbackInternal();
+            _virtualMicRenderOut?.Stop();
+            _virtualMicRenderOut?.Dispose();
+            _virtualMicRenderOut = null;
+            _virtualMicWaveBuffer = null;
+            ActiveVirtualMicEndpointName = null;
+        }
+    }
 
+    private void StopLoopbackInternal()
+    {
         if (_loopbackCapture is not null)
         {
             try { _loopbackCapture.StopRecording(); } catch { }
@@ -85,13 +133,33 @@ public sealed class WasapiOpusAudioEngine : IDisposable
             _loopbackCapture.Dispose();
             _loopbackCapture = null;
         }
-
-        _virtualMicRenderOut?.Stop();
-        _virtualMicRenderOut?.Dispose();
-        _virtualMicRenderOut = null;
-        _virtualMicWaveBuffer = null;
-        ActiveVirtualMicEndpointName = null;
     }
+
+    void IMMNotificationClient.OnDefaultDeviceChanged(DataFlow flow, Role role, string defaultDeviceId)
+    {
+        if (_disposed || flow != DataFlow.Render || role != Role.Multimedia) return;
+        if (string.Equals(_currentRenderDeviceId, defaultDeviceId, StringComparison.Ordinal)) return;
+
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(250).ConfigureAwait(false);
+            lock (_captureLock)
+            {
+                if (_disposed || !IsStreamingSpeaker) return;
+                try
+                {
+                    StopLoopbackInternal();
+                    StartLoopbackInternal();
+                }
+                catch { }
+            }
+        });
+    }
+
+    void IMMNotificationClient.OnDeviceStateChanged(string deviceId, DeviceState newState) { }
+    void IMMNotificationClient.OnDeviceAdded(string pwstrDeviceId) { }
+    void IMMNotificationClient.OnDeviceRemoved(string deviceId) { }
+    void IMMNotificationClient.OnPropertyValueChanged(string pwstrDeviceId, PropertyKey key) { }
 
     public void PushIncomingPhoneMicOpusPacket(uint sequenceNumber, ReadOnlySpan<byte> opusBytes)
     {
@@ -352,5 +420,11 @@ public sealed class WasapiOpusAudioEngine : IDisposable
         if (_disposed) return;
         _disposed = true;
         StopSpeakerCapture();
+        if (_deviceEnumerator is not null)
+        {
+            try { _deviceEnumerator.UnregisterEndpointNotificationCallback(this); } catch { }
+            _deviceEnumerator.Dispose();
+            _deviceEnumerator = null;
+        }
     }
 }

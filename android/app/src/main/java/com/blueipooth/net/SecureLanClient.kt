@@ -55,6 +55,7 @@ class SecureLanClient(
     }
 
     private val ioPool = Executors.newCachedThreadPool()
+    private val controlWriteLock = Any()
 
     @Volatile
     private var activeSslSocket: SSLSocket? = null
@@ -121,9 +122,11 @@ class SecureLanClient(
     fun sendControlJson(type: Byte, json: String) {
         val out = controlOut ?: return
         ioPool.execute {
-            try {
-                ControlFrameCodec.writeFrame(out, type, json)
-            } catch (_: Exception) {
+            synchronized(controlWriteLock) {
+                try {
+                    ControlFrameCodec.writeFrame(out, type, json)
+                } catch (_: Exception) {
+                }
             }
         }
     }

@@ -4,13 +4,65 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import struct
 from typing import Any, Awaitable, Callable
 
-from bumble import a2dp, avdtp, controller, device, hci, hfp, host, link, rfcomm
+from bumble import a2dp, avdtp, controller, device, hci, hfp, host, l2cap, link, pairing, rfcomm
 
 from virtual_controller import BlueipoothVirtualController, VirtualClassicPeerInfo
 
 logger = logging.getLogger(__name__)
+
+
+def _install_windows_l2cap_config_compat() -> None:
+    """
+    Windows BthA2dp.sys includes standard L2CAP FLUSH_TIMEOUT (0x02) and QOS (0x03)
+    options when configuring the A2DP RTP media channel. Stock Bumble rejects them
+    with FAILURE_UNKNOWN_OPTIONS, causing Windows to immediately tear down A2DP.
+    """
+    if getattr(l2cap.ClassicChannel, "_blueipooth_patched", False):
+        return
+
+    orig_on_configure_request = l2cap.ClassicChannel.on_configure_request
+
+    def _compat_on_configure_request(
+        self: l2cap.ClassicChannel, request: l2cap.L2CAP_Configure_Request
+    ) -> None:
+        pt = l2cap.L2CAP_Configure_Request.ParameterType
+        decoded = l2cap.L2CAP_Control_Frame.decode_configuration_options(request.options)
+        if not any(
+            opt[0] in (pt.FLUSH_TIMEOUT, pt.QOS, pt.EXTENDED_FLOW_SPEC)
+            for opt in decoded
+        ):
+            orig_on_configure_request(self, request)
+            return
+
+        if self.state not in (
+            self.State.WAIT_CONFIG,
+            self.State.WAIT_CONFIG_REQ,
+            self.State.WAIT_CONFIG_REQ_RSP,
+        ):
+            orig_on_configure_request(self, request)
+            return
+
+        filtered = [
+            opt
+            for opt in decoded
+            if opt[0] not in (pt.FLUSH_TIMEOUT, pt.QOS, pt.EXTENDED_FLOW_SPEC)
+        ]
+        sanitized_req = l2cap.L2CAP_Configure_Request(
+            identifier=request.identifier,
+            destination_cid=request.destination_cid,
+            flags=request.flags,
+            options=l2cap.L2CAP_Control_Frame.encode_configuration_options(filtered),
+        )
+        orig_on_configure_request(self, sanitized_req)
+
+    l2cap.ClassicChannel.on_configure_request = _compat_on_configure_request  # type: ignore[method-assign]
+    setattr(l2cap.ClassicChannel, "_blueipooth_patched", True)
+
+
+_install_windows_l2cap_config_compat()
 
 
 def derive_dual_macs(base_identifier: str) -> tuple[str, str]:
@@ -101,7 +153,7 @@ class DualMacVirtualHeadsetManager:
                 address=hci.Address(stereo_mac, hci.Address.PUBLIC_DEVICE_ADDRESS),
                 name=stereo_full_name,
                 class_of_device=0x240418,
-                service_uuids_16=[0x110B, 0x110E],  # Audio Sink, AVRCP
+                service_uuids_16=[0x110B],  # Pure A2DP Audio Sink
             )
         )
 
@@ -163,9 +215,13 @@ class DualMacVirtualHeadsetManager:
     async def _create_peer_device(
         self, name: str, mac: str, class_of_device: int
     ) -> tuple[controller.Controller, device.Device]:
-        ctrl = controller.Controller(
+        # Keep the synthesized headset controllers on the same Windows-compatible
+        # command handler as the exported adapter. Windows sends the Secure
+        # Connections Host Support opcode while setting up a BthUsb radio; the
+        # stock Controller answers UNKNOWN_HCI_COMMAND_ERROR and can abort pairing.
+        ctrl = BlueipoothVirtualController(
             name=f"ctrl-{name}",
-            link=self.virtual_link,
+            virtual_link=self.virtual_link,
             public_address=mac,
         )
         ctrl.lmp_features = self.main_controller.lmp_features
@@ -182,6 +238,14 @@ class DualMacVirtualHeadsetManager:
         dev.le_enabled = False
         dev.classic_sc_enabled = True
         dev.class_of_device = class_of_device
+        dev.pairing_config_factory = lambda _conn: pairing.PairingConfig(
+            sc=True,
+            mitm=False,
+            bonding=True,
+            delegate=pairing.PairingDelegate(
+                io_capability=pairing.PairingDelegate.NO_OUTPUT_NO_INPUT
+            ),
+        )
 
         await dev.power_on()
         await dev.set_discoverable(True)
@@ -228,22 +292,15 @@ class DualMacVirtualHeadsetManager:
         listener = avdtp.Listener.for_device(dev)
 
         def on_avdtp_connection(server: avdtp.Protocol) -> None:
+            logger.info("Windows connected AVDTP A2DP signaling to virtual Stereo headset")
             sink = server.add_sink(codec_caps)
+            logged_stream = False
 
-            def on_rtp_packet(packet: avdtp.MediaPacket) -> None:
-                # Forward SBC payload only when NativeA2dp mode is active;
-                # in GamingOpus mode, .NET WASAPI captures uncompressed 48kHz audio directly!
-                if self.audio_mode == "NativeA2dp" and self.ipc_emit is not None:
-                    asyncio.get_running_loop().create_task(
-                        self.ipc_emit(
-                            {
-                                "type": "a2dp_sbc_packet",
-                                "seq": packet.sequence_number,
-                                "ts": packet.timestamp,
-                                "payloadHex": packet.payload.hex(),
-                            }
-                        )
-                    )
+            def on_rtp_packet(_packet: avdtp.MediaPacket) -> None:
+                nonlocal logged_stream
+                if not logged_stream:
+                    logged_stream = True
+                    logger.info("Windows A2DP RTP media stream active")
 
             sink.on("rtp_packet", on_rtp_packet)
 

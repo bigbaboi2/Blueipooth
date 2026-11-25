@@ -13,6 +13,21 @@ public partial class App : System.Windows.Application
 
     protected override void OnStartup(StartupEventArgs e)
     {
+        DispatcherUnhandledException += (_, args) =>
+        {
+            try
+            {
+                string logDir = System.IO.Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "Blueipooth");
+                System.IO.Directory.CreateDirectory(logDir);
+                System.IO.File.WriteAllText(
+                    System.IO.Path.Combine(logDir, "crash.log"),
+                    args.Exception.ToString());
+            }
+            catch { }
+        };
+
         _instanceMutex = new Mutex(true, MutexName, out bool createdNew);
         if (!createdNew)
         {

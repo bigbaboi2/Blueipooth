@@ -39,6 +39,7 @@ public static partial class UsbipWin2Manager
         {
             Arguments = "install --id vadimgrn.usbip-win2 --accept-package-agreements --accept-source-agreements",
             UseShellExecute = true,
+            Verb = "runas",
         };
         using var proc = Process.Start(psi);
         if (proc is null) return false;

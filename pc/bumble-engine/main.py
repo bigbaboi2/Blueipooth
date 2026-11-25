@@ -224,8 +224,10 @@ def main() -> None:
     parser.add_argument("--log-level", default="INFO")
     args = parser.parse_args()
 
+    log_level = getattr(logging, args.log_level.upper(), logging.INFO)
+
     logging.basicConfig(
-        level=logging.DEBUG,
+        level=log_level,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         handlers=[
             logging.StreamHandler(sys.stdout),

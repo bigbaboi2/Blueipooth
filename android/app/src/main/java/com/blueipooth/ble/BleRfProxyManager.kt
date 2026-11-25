@@ -10,6 +10,7 @@ import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.os.ParcelUuid
+import org.json.JSONObject
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.UUID
@@ -23,7 +24,9 @@ import java.util.concurrent.ConcurrentHashMap
 @SuppressLint("MissingPermission")
 class BleRfProxyManager(
     context: Context,
-    private val onAdvReportJson: (String) -> Unit
+    private val onAdvReportJson: (String) -> Unit,
+    private val onScanStateChanged: (Boolean, String?) -> Unit = { _, _ -> },
+    private val onDeviceDiscovered: (address: String, name: String, rssi: Int, connectable: Boolean) -> Unit = { _, _, _, _ -> }
 ) {
     private val btManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
     private val adapter get() = btManager?.adapter
@@ -41,6 +44,13 @@ class BleRfProxyManager(
     var totalReportsForwarded: Long = 0
         private set
 
+    @Volatile
+    var scanError: String? = null
+        private set
+
+    val uniqueDevicesSeen: Int
+        get() = lastReportTimeMs.size
+
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
             handleScanResult(result)
@@ -48,6 +58,12 @@ class BleRfProxyManager(
 
         override fun onBatchScanResults(results: MutableList<ScanResult>) {
             for (r in results) handleScanResult(r)
+        }
+
+        override fun onScanFailed(errorCode: Int) {
+            isScanning = false
+            scanError = "Android báo lỗi quét BLE ($errorCode)"
+            onScanStateChanged(false, scanError)
         }
     }
 
@@ -62,23 +78,47 @@ class BleRfProxyManager(
     }
 
     fun setScanning(enable: Boolean) {
-        val scanner = adapter?.bluetoothLeScanner ?: return
+        if (!enable) {
+            val scanner = adapter?.bluetoothLeScanner
+            try {
+                if (isScanning) scanner?.stopScan(scanCallback)
+            } catch (_: Exception) {
+                // The adapter may have turned off while stopping.
+            }
+            isScanning = false
+            scanError = null
+            onScanStateChanged(false, null)
+            return
+        }
+
+        val scanner = adapter?.bluetoothLeScanner
+        if (scanner == null) {
+            isScanning = false
+            scanError = "Bluetooth trên điện thoại đang tắt hoặc không hỗ trợ quét BLE"
+            onScanStateChanged(false, scanError)
+            return
+        }
+
         try {
-            if (enable && !isScanning) {
+            if (!isScanning) {
                 val settings = ScanSettings.Builder()
                     .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
                     .setReportDelay(0L)
                     .build()
+                lastReportTimeMs.clear()
                 scanner.startScan(null, settings, scanCallback)
                 isScanning = true
-            } else if (!enable && isScanning) {
-                scanner.stopScan(scanCallback)
-                isScanning = false
+                scanError = null
+                onScanStateChanged(true, null)
             }
-        } catch (_: SecurityException) {
+        } catch (ex: SecurityException) {
             isScanning = false
-        } catch (_: Exception) {
+            scanError = "Thiếu quyền Bluetooth Scan trên điện thoại"
+            onScanStateChanged(false, scanError)
+        } catch (ex: Exception) {
             isScanning = false
+            scanError = "Không khởi động được quét BLE: ${ex.message ?: ex.javaClass.simpleName}"
+            onScanStateChanged(false, scanError)
         }
     }
 
@@ -128,7 +168,15 @@ class BleRfProxyManager(
         val connectable = result.isConnectable
 
         totalReportsForwarded++
-        val json = """{"address":"$addr","name":"$devName","addrType":1,"rssi":${result.rssi},"connectable":$connectable,"dataHex":"$trimmedHex"}"""
+        onDeviceDiscovered(addr, devName, result.rssi, connectable)
+        val json = JSONObject()
+            .put("address", addr)
+            .put("name", devName)
+            .put("addrType", 1)
+            .put("rssi", result.rssi)
+            .put("connectable", connectable)
+            .put("dataHex", trimmedHex)
+            .toString()
         onAdvReportJson(json)
     }
 

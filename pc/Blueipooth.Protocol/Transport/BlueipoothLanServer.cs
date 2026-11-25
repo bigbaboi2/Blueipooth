@@ -34,11 +34,14 @@ public sealed class BlueipoothLanServer : IAsyncDisposable
     private Socket? _udpSocket;
     private CancellationTokenSource? _cts;
     private Stream? _activeControlStream;
+    private TcpClient? _activeControlClient;
+    private volatile bool _connectionsPaused;
     private readonly SemaphoreSlim _controlWriteLock = new(1, 1);
     private IPEndPoint? _peerMediaEndPoint;
     private uint _txSequence;
 
     public ConnectedPhoneInfo? CurrentPhone { get; private set; }
+    public bool ConnectionsPaused => _connectionsPaused;
     public double LatestRttMs { get; private set; }
 
     public event Action<ConnectedPhoneInfo?>? PhoneConnectionChanged;
@@ -47,6 +50,15 @@ public sealed class BlueipoothLanServer : IAsyncDisposable
     public event Action<HeadsetStateMessage>? HeadsetStateReceived;
     public event Action<MediaControlMessage>? MediaControlReceived;
     public event Action<ReadOnlyMemory<byte>, MediaPacketHeader>? PhoneMicOpusFrameReceived;
+
+    public void SetConnectionsPaused(bool paused)
+    {
+        _connectionsPaused = paused;
+        if (paused)
+        {
+            try { _activeControlClient?.Close(); } catch { }
+        }
+    }
 
     public BlueipoothLanServer(int controlPort = 49550, int mediaUdpPort = 49551)
     {
@@ -175,6 +187,7 @@ public sealed class BlueipoothLanServer : IAsyncDisposable
         {
             try
             {
+                if (_connectionsPaused) return;
                 await ssl.AuthenticateAsServerAsync(new SslServerAuthenticationOptions
                 {
                     ServerCertificate = _serverCert,
@@ -185,6 +198,7 @@ public sealed class BlueipoothLanServer : IAsyncDisposable
                 var firstFrame = await ControlFrameCodec.ReadFrameAsync(ssl, ct).ConfigureAwait(false);
                 if (firstFrame is null || firstFrame.Value.Type != ControlMessageType.PairHello)
                     return;
+                if (_connectionsPaused) return;
 
                 var hello = ControlFrameCodec.Deserialize<PairHelloMessage>(firstFrame.Value.JsonPayload);
                 byte[] sessionMediaKey;
@@ -231,8 +245,10 @@ public sealed class BlueipoothLanServer : IAsyncDisposable
                 }
 
                 var remoteTcpEp = (IPEndPoint)client.Client.RemoteEndPoint!;
+                if (_connectionsPaused) return;
                 _peerMediaEndPoint = new IPEndPoint(remoteTcpEp.Address, hello.UdpPort > 0 ? hello.UdpPort : MediaUdpPort);
                 _activeControlStream = ssl;
+                _activeControlClient = client;
 
                 bool isUsb = IPAddress.IsLoopback(remoteTcpEp.Address) ||
                              NetworkDiscoveryService.GetLocalCandidates()
@@ -269,6 +285,7 @@ public sealed class BlueipoothLanServer : IAsyncDisposable
                 if (ReferenceEquals(_activeControlStream, ssl))
                 {
                     _activeControlStream = null;
+                    _activeControlClient = null;
                     _peerMediaEndPoint = null;
                     CurrentPhone = null;
                     PhoneConnectionChanged?.Invoke(null);

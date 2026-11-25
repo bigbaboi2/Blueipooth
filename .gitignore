@@ -1,5 +1,7 @@
 # Local isolated toolchains
 .tools/
+.gradle-home/
+dist/
 
 # .NET build artifacts
 **/bin/

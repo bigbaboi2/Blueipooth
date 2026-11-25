@@ -22,6 +22,8 @@ public sealed partial class BlueipoothCoordinator : IAsyncDisposable
 
     public string CurrentAudioMode { get; private set; } = "GamingOpus"; // "GamingOpus" | "NativeA2dp"
     public int CurrentJitterBufferMs { get; private set; } = 30;
+    public bool IsConnectionPaused => LanServer.ConnectionsPaused;
+    public bool IsBleScanning { get; private set; }
     public HeadsetStateMessage? AttachedHeadset { get; private set; }
     public string? SynthesizedStereoMac { get; private set; }
     public string? SynthesizedMicMac { get; private set; }
@@ -68,9 +70,15 @@ public sealed partial class BlueipoothCoordinator : IAsyncDisposable
                 StateChanged?.Invoke();
             };
 
-            await Bumble.StartAsync(49552, 49553);
+            await Bumble.StartAsync();
             UsbIp.UpdateH4Port(Bumble.H4Port);
             Log("Bumble Bluetooth 5.2 Virtual Controller started.");
+
+            await Bumble.SetAudioModeAsync(CurrentAudioMode);
+            if (AttachedHeadset is { Connected: true } pendingHs)
+            {
+                await Bumble.UpdateHeadsetStateAsync(pendingHs);
+            }
         }
         else
         {
@@ -126,8 +134,52 @@ public sealed partial class BlueipoothCoordinator : IAsyncDisposable
 
     public QrPairingPayload GetPairingQrPayload() => LanServer.GenerateCurrentQrPayload();
 
+    public void SetConnectionPaused(bool paused)
+    {
+        LanServer.SetConnectionsPaused(paused);
+        Log(paused ? "Phone connection paused from PC." : "Phone connection resumed from PC.");
+        StateChanged?.Invoke();
+    }
+
+    private CancellationTokenSource? _bleScanTimeoutCts;
+
+    public async Task RequestBleScanAsync(bool enable)
+    {
+        _bleScanTimeoutCts?.Cancel();
+        _bleScanTimeoutCts?.Dispose();
+        _bleScanTimeoutCts = null;
+
+        IsBleScanning = enable;
+        Log(enable ? "Sending BLE scan START request to Android (15s timeout)..." : "Sending BLE scan STOP request to Android...");
+        await LanServer.SendControlMessageAsync(
+            ControlMessageType.BleScanCmd,
+            new BleScanCmdMessage(Enable: enable, FilterDuplicates: false));
+        StateChanged?.Invoke();
+
+        if (enable)
+        {
+            var cts = new CancellationTokenSource();
+            _bleScanTimeoutCts = cts;
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(15), cts.Token);
+                    if (IsBleScanning && !cts.IsCancellationRequested)
+                    {
+                        await RequestBleScanAsync(false);
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                }
+            });
+        }
+    }
+
     private void WireEvents()
     {
+        UsbIp.DiagLog += msg => Log($"[UsbIp] {msg}");
         UsbIp.DriverAttachmentChanged += attached =>
         {
             Log(attached
@@ -150,6 +202,7 @@ public sealed partial class BlueipoothCoordinator : IAsyncDisposable
             else
             {
                 Log("Android companion disconnected.");
+                IsBleScanning = false;
                 AttachedHeadset = null;
                 SynthesizedStereoMac = null;
                 SynthesizedMicMac = null;
@@ -200,16 +253,13 @@ public sealed partial class BlueipoothCoordinator : IAsyncDisposable
 
         AudioEngine.EncodedStereoOpusFrameReady += opusBytes =>
         {
-            if (CurrentAudioMode == "GamingOpus")
-            {
-                LanServer.SendPcStereoOpusFrame(opusBytes.Span, gamingDirect: true);
-            }
+            LanServer.SendPcStereoOpusFrame(opusBytes.Span, gamingDirect: CurrentAudioMode == "GamingOpus");
         };
     }
 
     private void UpdateAudioCaptureState()
     {
-        bool shouldStreamDirect = LanServer.CurrentPhone is not null && CurrentAudioMode == "GamingOpus";
+        bool shouldStreamDirect = LanServer.CurrentPhone is not null;
         if (shouldStreamDirect && !AudioEngine.IsStreamingSpeaker)
         {
             try
@@ -230,8 +280,10 @@ public sealed partial class BlueipoothCoordinator : IAsyncDisposable
 
     private void OnBumbleBleScanRequested(BleScanCmdMessage cmd)
     {
+        IsBleScanning = cmd.Enable;
         Log($"Windows requested BLE 2.4GHz Scan: {(cmd.Enable ? "START" : "STOP")}");
         _ = LanServer.SendControlMessageAsync(ControlMessageType.BleScanCmd, cmd);
+        StateChanged?.Invoke();
     }
 
     private void OnBumbleBleAdvRequested(BleAdvCmdMessage cmd)

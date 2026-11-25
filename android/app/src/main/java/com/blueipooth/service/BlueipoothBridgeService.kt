@@ -11,7 +11,9 @@ import android.content.pm.ServiceInfo
 import android.net.wifi.WifiManager
 import android.os.Binder
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.os.PowerManager
 import com.blueipooth.audio.ConnectedHeadsetInfo
 import com.blueipooth.audio.LowLatencyAudioBridge
@@ -25,6 +27,17 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import org.json.JSONObject
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
+
+data class ScannedBleDevice(
+    val address: String,
+    val name: String,
+    val rssi: Int,
+    val connectable: Boolean,
+    val lastSeenMs: Long,
+    val firstSeenSeq: Long = 0L
+)
 
 data class BridgeUiState(
     val isConnected: Boolean = false,
@@ -35,8 +48,10 @@ data class BridgeUiState(
     val micEnabled: Boolean = false,
     val headset: ConnectedHeadsetInfo = ConnectedHeadsetInfo(false, "Loa điện thoại", "", true),
     val bleScanning: Boolean = false,
+    val bleScanError: String? = null,
     val bleAdvertising: Boolean = false,
-    val blePacketsCount: Long = 0,
+    val bleDevicesFound: Int = 0,
+    val bleDevices: List<ScannedBleDevice> = emptyList(),
     val discoveredHosts: List<DiscoveredPcHost> = emptyList(),
     val lastError: String? = null
 )
@@ -55,6 +70,14 @@ class BlueipoothBridgeService : Service() {
     private val binder = LocalBinder()
     private val _uiState = MutableStateFlow(BridgeUiState())
     val uiState: StateFlow<BridgeUiState> = _uiState.asStateFlow()
+    private val discoveredBleMap = ConcurrentHashMap<String, ScannedBleDevice>()
+    private val bleSeqCounter = AtomicLong(0L)
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val bleAutoStopRunnable = Runnable {
+        if (bleProxy.isScanning) {
+            bleProxy.setScanning(false)
+        }
+    }
 
     private var wifiLock: WifiManager.WifiLock? = null
     private var wakeLock: PowerManager.WakeLock? = null
@@ -69,10 +92,52 @@ class BlueipoothBridgeService : Service() {
         startForegroundCompat(buildNotification("Đang chờ kết nối với PC..."))
         acquireLowLatencyLocks()
 
-        bleProxy = BleRfProxyManager(this) { advJson ->
-            lanClient.sendControlJson(ControlMessageType.BLE_ADV_REPORT, advJson)
-            _uiState.update { it.copy(blePacketsCount = bleProxy.totalReportsForwarded) }
-        }
+        bleProxy = BleRfProxyManager(
+            context = this,
+            onAdvReportJson = { advJson ->
+                if (_uiState.value.isConnected) {
+                    lanClient.sendControlJson(ControlMessageType.BLE_ADV_REPORT, advJson)
+                }
+                _uiState.update { it.copy(bleDevicesFound = bleProxy.uniqueDevicesSeen) }
+            },
+            onScanStateChanged = { scanning, error ->
+                mainHandler.removeCallbacks(bleAutoStopRunnable)
+                if (scanning) {
+                    discoveredBleMap.clear()
+                    mainHandler.postDelayed(bleAutoStopRunnable, 15_000L)
+                }
+                _uiState.update {
+                    it.copy(
+                        bleScanning = scanning,
+                        bleScanError = error,
+                        bleDevicesFound = if (scanning) 0 else it.bleDevicesFound,
+                        bleDevices = if (scanning) emptyList() else it.bleDevices
+                    )
+                }
+            },
+            onDeviceDiscovered = { addr, name, rssi, connectable ->
+                val existing = discoveredBleMap[addr]
+                val seq = existing?.firstSeenSeq ?: bleSeqCounter.incrementAndGet()
+                val resolvedName = name.ifBlank { existing?.name ?: "" }
+                discoveredBleMap[addr] = ScannedBleDevice(
+                    address = addr,
+                    name = resolvedName,
+                    rssi = rssi,
+                    connectable = connectable,
+                    lastSeenMs = System.currentTimeMillis(),
+                    firstSeenSeq = seq
+                )
+                val stableList = discoveredBleMap.values
+                    .sortedBy { it.firstSeenSeq }
+                    .take(40)
+                _uiState.update {
+                    it.copy(
+                        bleDevices = stableList,
+                        bleDevicesFound = discoveredBleMap.size
+                    )
+                }
+            }
+        )
 
         audioBridge = LowLatencyAudioBridge(
             context = this,
@@ -108,7 +173,12 @@ class BlueipoothBridgeService : Service() {
             },
             onBleScanCommand = { enable ->
                 bleProxy.setScanning(enable)
-                _uiState.update { it.copy(bleScanning = bleProxy.isScanning) }
+                _uiState.update {
+                    it.copy(
+                        bleScanning = bleProxy.isScanning,
+                        bleScanError = bleProxy.scanError
+                    )
+                }
             },
             onBleAdvCommand = { enable, hex ->
                 bleProxy.setAdvertising(enable, hex)
@@ -154,6 +224,15 @@ class BlueipoothBridgeService : Service() {
 
     fun reconnectToPc() {
         lanClient.resumeAutoReconnect()
+    }
+
+    fun toggleLocalBleScan() {
+        bleProxy.setScanning(!bleProxy.isScanning)
+    }
+
+    fun clearBleDevices() {
+        discoveredBleMap.clear()
+        _uiState.update { it.copy(bleDevices = emptyList(), bleDevicesFound = 0) }
     }
 
     private fun sendHeadsetStateToPc(hs: ConnectedHeadsetInfo) {
@@ -235,6 +314,7 @@ class BlueipoothBridgeService : Service() {
     override fun onBind(intent: Intent?): IBinder = binder
 
     override fun onDestroy() {
+        mainHandler.removeCallbacks(bleAutoStopRunnable)
         bleProxy.stopAll()
         audioBridge.stop()
         lanClient.stop()

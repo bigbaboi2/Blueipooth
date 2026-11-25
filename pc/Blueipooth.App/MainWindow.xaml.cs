@@ -2,7 +2,11 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
+using System.Text;
 using System.Windows;
+using System.Windows.Input;
+using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using Blueipooth.App.Services;
@@ -13,41 +17,126 @@ using QRCoder;
 
 namespace Blueipooth.App;
 
+public sealed class BleDeviceViewItem
+{
+    public required string DisplayName { get; init; }
+    public required string Subtitle { get; init; }
+    public required string RssiText { get; init; }
+    public required System.Windows.Media.Brush RssiBrush { get; init; }
+}
+
 public partial class MainWindow : Window
 {
     private readonly BlueipoothCoordinator _coordinator = new();
     private readonly DispatcherTimer _uiRefreshTimer;
     private readonly ConcurrentDictionary<string, BleAdvReportMessage> _bleDevices = new();
+    private readonly ConcurrentDictionary<string, long> _bleFirstSeenOrder = new();
+    private readonly ConcurrentQueue<string> _pendingUiLogs = new();
+    private long _bleOrderCounter;
+    private AppSettings _settings = new();
     private System.Windows.Forms.NotifyIcon? _trayIcon;
     private bool _isExplicitExit;
     private bool _uiInitialized;
+    private int _bleListDirty;
+    private double _latestSpeakerPeak;
+    private double _latestMicPeak;
 
     public MainWindow()
     {
         InitializeComponent();
+        LoadAndApplySettings();
         SetupSystemTray();
 
-        _coordinator.LogAdded += line => Dispatcher.BeginInvoke(() =>
-        {
-            TxtLogs.AppendText(line + Environment.NewLine);
-            TxtLogs.ScrollToEnd();
-        });
+        _coordinator.LogAdded += line => _pendingUiLogs.Enqueue(line);
         _coordinator.StateChanged += () => Dispatcher.BeginInvoke(RefreshUiState);
         _coordinator.BleDeviceDiscovered += adv =>
         {
+            _bleFirstSeenOrder.GetOrAdd(adv.Address, _ => Interlocked.Increment(ref _bleOrderCounter));
             _bleDevices[adv.Address] = adv;
-            Dispatcher.BeginInvoke(RefreshBleList);
+            Interlocked.Exchange(ref _bleListDirty, 1);
         };
-        _coordinator.AudioEngine.SpeakerPeakLevelChanged += lvl =>
-            Dispatcher.BeginInvoke(() => PbSpeakerLevel.Value = lvl * 100.0);
-        _coordinator.AudioEngine.MicPeakLevelChanged += lvl =>
-            Dispatcher.BeginInvoke(() => PbMicLevel.Value = lvl * 100.0);
+        _coordinator.AudioEngine.SpeakerPeakLevelChanged += lvl => Interlocked.Exchange(ref _latestSpeakerPeak, lvl);
+        _coordinator.AudioEngine.MicPeakLevelChanged += lvl => Interlocked.Exchange(ref _latestMicPeak, lvl);
 
-        _uiRefreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+        _uiRefreshTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
         _uiRefreshTimer.Tick += (_, _) => RefreshCountersAndStatus();
 
         Loaded += OnMainWindowLoaded;
         Closing += OnMainWindowClosing;
+    }
+
+    private void LoadAndApplySettings()
+    {
+        _settings = AppSettings.Load();
+        ApplyTheme(_settings.Theme);
+        ExpLogs.IsExpanded = _settings.ExpandLogsByDefault;
+
+        RbThemeMidnight.IsChecked = _settings.Theme == AppThemeMode.Midnight;
+        RbThemeOcean.IsChecked = _settings.Theme == AppThemeMode.Ocean;
+        RbThemeLight.IsChecked = _settings.Theme == AppThemeMode.Light;
+        ChkExpandLogsDefault.IsChecked = _settings.ExpandLogsByDefault;
+
+        RbCloseTray.IsChecked = _settings.CloseBehavior == WindowCloseBehavior.MinimizeToTray;
+        RbCloseExit.IsChecked = _settings.CloseBehavior == WindowCloseBehavior.ExitApplication;
+    }
+
+    private static void ApplyTheme(AppThemeMode theme)
+    {
+        var res = System.Windows.Application.Current.Resources;
+        switch (theme)
+        {
+            case AppThemeMode.Ocean:
+                SetBrush(res, "BgDarkBrush", "#071426");
+                SetBrush(res, "SidebarBgBrush", "#0B1E36");
+                SetBrush(res, "CardBgBrush", "#102847");
+                SetBrush(res, "SubCardBgBrush", "#09182E");
+                SetBrush(res, "CardBorderBrush", "#1E4270");
+                SetBrush(res, "AccentCyanBrush", "#22D3EE");
+                SetBrush(res, "TextPrimaryBrush", "#F0F9FF");
+                SetBrush(res, "TextMutedBrush", "#93C5FD");
+                SetBrush(res, "SecondaryBtnBgBrush", "#17375E");
+                SetBrush(res, "SecondaryBtnHoverBrush", "#1E497A");
+                SetBrush(res, "SecondaryBtnFgBrush", "#E0F2FE");
+                SetBrush(res, "NavActiveBgBrush", "#164E63");
+                break;
+
+            case AppThemeMode.Light:
+                SetBrush(res, "BgDarkBrush", "#F1F5F9");
+                SetBrush(res, "SidebarBgBrush", "#FFFFFF");
+                SetBrush(res, "CardBgBrush", "#FFFFFF");
+                SetBrush(res, "SubCardBgBrush", "#F8FAFC");
+                SetBrush(res, "CardBorderBrush", "#CBD5E1");
+                SetBrush(res, "AccentCyanBrush", "#0284C7");
+                SetBrush(res, "TextPrimaryBrush", "#0F172A");
+                SetBrush(res, "TextMutedBrush", "#475569");
+                SetBrush(res, "SecondaryBtnBgBrush", "#E2E8F0");
+                SetBrush(res, "SecondaryBtnHoverBrush", "#CBD5E1");
+                SetBrush(res, "SecondaryBtnFgBrush", "#1E293B");
+                SetBrush(res, "NavActiveBgBrush", "#E0F2FE");
+                break;
+
+            case AppThemeMode.Midnight:
+            default:
+                SetBrush(res, "BgDarkBrush", "#0B1120");
+                SetBrush(res, "SidebarBgBrush", "#11192B");
+                SetBrush(res, "CardBgBrush", "#162033");
+                SetBrush(res, "SubCardBgBrush", "#0F172A");
+                SetBrush(res, "CardBorderBrush", "#263552");
+                SetBrush(res, "AccentCyanBrush", "#38BDF8");
+                SetBrush(res, "TextPrimaryBrush", "#F8FAFC");
+                SetBrush(res, "TextMutedBrush", "#94A3B8");
+                SetBrush(res, "SecondaryBtnBgBrush", "#24324A");
+                SetBrush(res, "SecondaryBtnHoverBrush", "#314464");
+                SetBrush(res, "SecondaryBtnFgBrush", "#E2E8F0");
+                SetBrush(res, "NavActiveBgBrush", "#1E3A5F");
+                break;
+        }
+    }
+
+    private static void SetBrush(ResourceDictionary res, string key, string hex)
+    {
+        var color = (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(hex);
+        res[key] = new SolidColorBrush(color);
     }
 
     private async void OnMainWindowLoaded(object sender, RoutedEventArgs e)
@@ -62,6 +151,18 @@ public partial class MainWindow : Window
             await _coordinator.InitializeAsync();
             RenderQrCode();
             RefreshUiState();
+
+            if (!UsbipWin2Manager.IsDriverInstalled || !VirtualAudioCableInstaller.IsInstalled)
+            {
+                var choice = System.Windows.MessageBox.Show(
+                    this,
+                    "Máy đang thiếu thành phần cần thiết. Blueipooth có thể tải và cài VB-CABLE cùng driver Bluetooth ảo. Windows sẽ hỏi quyền quản trị và có thể yêu cầu khởi động lại.",
+                    "Hoàn tất thiết lập Blueipooth",
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Information);
+                if (choice == MessageBoxResult.Yes)
+                    await InstallMissingComponentsAsync();
+            }
 
             string[] cliArgs = Environment.GetCommandLineArgs();
             int ssIdx = Array.IndexOf(cliArgs, "--screenshot");
@@ -81,7 +182,7 @@ public partial class MainWindow : Window
                         dc.DrawRectangle(vb, null, new Rect(0, 0, w, h));
                     }
                 }
-                var rtb = new RenderTargetBitmap(w, h, 96, 96, System.Windows.Media.PixelFormats.Pbgra32);
+                var rtb = new RenderTargetBitmap(w, h, 96, 96, PixelFormats.Pbgra32);
                 rtb.Render(dv);
                 var encoder = new PngBitmapEncoder();
                 encoder.Frames.Add(BitmapFrame.Create(rtb));
@@ -96,6 +197,31 @@ public partial class MainWindow : Window
         {
             TxtLogs.AppendText($"[Error] Initialization error: {ex.Message}{Environment.NewLine}");
         }
+    }
+
+    private void OnNavTabChanged(object sender, RoutedEventArgs e)
+    {
+        if (!_uiInitialized) return;
+
+        PanelConnect.Visibility = TabConnect.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
+        PanelBluetooth.Visibility = TabBluetooth.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
+        PanelAudio.Visibility = TabAudio.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
+
+        // Smooth fade + subtle slide transition
+        TabContentHost.Opacity = 0.0;
+        TabContentSlide.Y = 8;
+
+        var fade = new DoubleAnimation(0.0, 1.0, TimeSpan.FromMilliseconds(180))
+        {
+            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+        };
+        var slide = new DoubleAnimation(8, 0, TimeSpan.FromMilliseconds(180))
+        {
+            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+        };
+
+        TabContentHost.BeginAnimation(OpacityProperty, fade);
+        TabContentSlide.BeginAnimation(TranslateTransform.YProperty, slide);
     }
 
     private void SetupSystemTray()
@@ -152,14 +278,19 @@ public partial class MainWindow : Window
     private void RefreshUiState()
     {
         bool drvInstalled = UsbipWin2Manager.IsDriverInstalled;
-        TxtDriverStatus.Text = drvInstalled ? "Đã cài (WHQL Signed)" : "Chưa cài đặt";
+        TxtDriverStatus.Text = drvInstalled ? "Đã cài (WHQL)" : "Chưa cài";
         TxtDriverStatus.Foreground = drvInstalled
             ? System.Windows.Media.Brushes.LightGreen
             : System.Windows.Media.Brushes.Orange;
-        BtnInstallDriver.Visibility = drvInstalled ? Visibility.Collapsed : Visibility.Visible;
+        bool cableInstalled = VirtualAudioCableInstaller.IsInstalled;
+        TxtCableStatus.Text = cableInstalled ? "Đã cài" : "Chưa cài";
+        TxtCableStatus.Foreground = cableInstalled
+            ? System.Windows.Media.Brushes.LightGreen
+            : System.Windows.Media.Brushes.Orange;
+        BtnInstallDriver.Visibility = drvInstalled && cableInstalled ? Visibility.Collapsed : Visibility.Visible;
 
         bool attached = _coordinator.UsbIp.IsDriverAttached;
-        TxtAdapterStatus.Text = attached ? "ĐANG HOẠT ĐỘNG (BthUsb.sys)" : "Chưa gắn vào Windows";
+        TxtAdapterStatus.Text = attached ? "ĐANG BẬT" : "Chưa gắn";
         TxtAdapterStatus.Foreground = attached
             ? System.Windows.Media.Brushes.LightGreen
             : System.Windows.Media.Brushes.Gold;
@@ -168,11 +299,16 @@ public partial class MainWindow : Window
             : "Bật Card Bluetooth Ảo trên Windows";
 
         var phone = _coordinator.LanServer.CurrentPhone;
+        BtnPauseConnection.Content = _coordinator.IsConnectionPaused ? "Tiếp tục kết nối" : "Tạm ngừng kết nối";
         if (phone is not null)
         {
             string transport = phone.IsUsbLink ? "Cáp USB (~1ms)" : $"Wi-Fi/LAN ({phone.RttMs:0.0} ms)";
-            TxtPhoneStatus.Text = $"Đã kết nối: {phone.DeviceName} • {transport}";
+            TxtPhoneStatus.Text = $"Đã kết nối với {phone.DeviceName}";
             TxtPhoneStatus.Foreground = System.Windows.Media.Brushes.LightGreen;
+            TxtCandidateIps.Text = $"IP: {phone.RemoteIp} • {transport}";
+
+            DotTopConn.Fill = new SolidColorBrush(System.Windows.Media.Color.FromRgb(74, 222, 128));
+            TxtTopConnBadge.Text = $"Đã nối: {phone.DeviceName}";
 
             double oneWayNetMs = phone.IsUsbLink ? 1.0 : Math.Max(1.0, phone.RttMs / 2.0);
             int bufMs = _coordinator.CurrentJitterBufferMs;
@@ -182,11 +318,33 @@ public partial class MainWindow : Window
         }
         else
         {
-            TxtPhoneStatus.Text = "Chưa kết nối — Mở App Android quét QR";
-            TxtPhoneStatus.Foreground = System.Windows.Media.Brushes.Gold;
+            TxtPhoneStatus.Text = _coordinator.IsConnectionPaused
+                ? "Đang tạm ngừng kết nối"
+                : "Mở Blueipooth trên điện thoại rồi quét mã QR";
+            TxtPhoneStatus.Foreground = _coordinator.IsConnectionPaused
+                ? System.Windows.Media.Brushes.LightSkyBlue
+                : System.Windows.Media.Brushes.Gold;
+            TxtCandidateIps.Text = _coordinator.IsConnectionPaused
+                ? "Bấm Tiếp tục kết nối để cho phép điện thoại kết nối lại."
+                : "IP PC: " + string.Join(" • ", NetworkDiscoveryService.GetLocalCandidates().Select(c => c.IpAddress));
+
+            DotTopConn.Fill = new SolidColorBrush(System.Windows.Media.Color.FromRgb(251, 191, 36));
+            TxtTopConnBadge.Text = _coordinator.IsConnectionPaused ? "Đang tạm ngừng" : "Chờ kết nối điện thoại";
+
             TxtAudioLatency.Text = "Chờ kết nối...";
             TxtAudioLatency.Foreground = System.Windows.Media.Brushes.Gray;
         }
+
+        // BLE scan UI state
+        bool scanning = _coordinator.IsBleScanning;
+        BtnScanBle.Content = scanning ? "Dừng quét" : "Quét Bluetooth";
+        BtnScanBle.IsEnabled = phone is not null;
+        PbBleScanning.Visibility = scanning ? Visibility.Visible : Visibility.Collapsed;
+        TxtBleScanStatus.Text = phone is null
+            ? "Hãy kết nối điện thoại trước để gửi yêu cầu quét Bluetooth"
+            : scanning
+                ? $"Đang quét thiết bị BLE qua điện thoại... ({_bleDevices.Count} thiết bị)"
+                : $"Sẵn sàng — đã tìm thấy {_bleDevices.Count} thiết bị BLE";
 
         if (_coordinator.AttachedHeadset is { Connected: true } hs)
         {
@@ -203,22 +361,97 @@ public partial class MainWindow : Window
     private void RefreshCountersAndStatus()
     {
         TxtHciCounters.Text = $"{_coordinator.UsbIp.TotalHciCommands} Cmd / {_coordinator.UsbIp.TotalHciEvents} Evt";
-        if (!_coordinator.AudioEngine.IsStreamingSpeaker)
+
+        double speakerPeak = Interlocked.Exchange(ref _latestSpeakerPeak, 0);
+        PbSpeakerLevel.Value = _coordinator.AudioEngine.IsStreamingSpeaker
+            ? Math.Max(speakerPeak * 100.0, PbSpeakerLevel.Value * 0.55)
+            : 0;
+
+        double micPeak = Interlocked.Exchange(ref _latestMicPeak, 0);
+        PbMicLevel.Value = Math.Max(micPeak * 100.0, PbMicLevel.Value * 0.55);
+
+        if (Interlocked.Exchange(ref _bleListDirty, 0) != 0)
         {
-            PbSpeakerLevel.Value = 0;
+            RefreshBleList();
         }
-        PbMicLevel.Value = Math.Max(0, PbMicLevel.Value * 0.6);
+
+        var batch = new StringBuilder();
+        for (int i = 0; i < 250 && _pendingUiLogs.TryDequeue(out string? line); i++)
+            batch.AppendLine(line);
+        if (batch.Length > 0)
+        {
+            TxtLogs.AppendText(batch.ToString());
+            const int maxLogChars = 100_000;
+            if (TxtLogs.Text.Length > maxLogChars)
+            {
+                int removeChars = TxtLogs.Text.Length - maxLogChars + 10_000;
+                TxtLogs.Select(0, removeChars);
+                TxtLogs.SelectedText = string.Empty;
+            }
+            TxtLogs.ScrollToEnd();
+        }
     }
 
     private void RefreshBleList()
     {
-        LstBleDevices.Items.Clear();
-        foreach (var item in _bleDevices.Values.OrderByDescending(d => d.Rssi).Take(30))
+        bool hideUnnamed = ChkHideUnnamedBle.IsChecked == true;
+        var items = _bleDevices.Values
+            .Where(d => !hideUnnamed || (!string.IsNullOrWhiteSpace(d.Name) && d.Connectable))
+            .OrderBy(d => _bleFirstSeenOrder.GetValueOrDefault(d.Address, long.MaxValue))
+            .Take(50)
+            .Select(item =>
+            {
+                string label = string.IsNullOrWhiteSpace(item.Name) ? "(Thiết bị BLE ẩn tên)" : item.Name;
+                string conn = item.Connectable ? "Có thể kết nối" : "Chỉ phát quảng bá";
+                System.Windows.Media.Brush rssiBrush = item.Rssi >= -65
+                    ? System.Windows.Media.Brushes.LightGreen
+                    : item.Rssi >= -80
+                        ? System.Windows.Media.Brushes.Gold
+                        : System.Windows.Media.Brushes.Salmon;
+                return new BleDeviceViewItem
+                {
+                    DisplayName = label,
+                    Subtitle = $"{item.Address} • {conn}",
+                    RssiText = $"{item.Rssi} dBm",
+                    RssiBrush = rssiBrush
+                };
+            })
+            .ToList();
+
+        LstBleDevices.ItemsSource = items;
+        TxtBleEmptyHint.Visibility = items.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void OnBleFilterChanged(object sender, RoutedEventArgs e)
+    {
+        if (!_uiInitialized) return;
+        RefreshBleList();
+    }
+
+    private async void OnToggleBleScanClick(object sender, RoutedEventArgs e)
+    {
+        if (_coordinator.LanServer.CurrentPhone is null) return;
+        BtnScanBle.IsEnabled = false;
+        try
         {
-            string label = string.IsNullOrWhiteSpace(item.Name) ? "(Thiết bị BLE ẩn tên)" : item.Name;
-            LstBleDevices.Items.Add($"{item.Address} | {item.Rssi,4} dBm | {label}");
+            await _coordinator.RequestBleScanAsync(!_coordinator.IsBleScanning);
+        }
+        finally
+        {
+            BtnScanBle.IsEnabled = _coordinator.LanServer.CurrentPhone is not null;
+            RefreshUiState();
         }
     }
+
+    private void OnClearBleListClick(object sender, RoutedEventArgs e)
+    {
+        _bleDevices.Clear();
+        _bleFirstSeenOrder.Clear();
+        RefreshBleList();
+        RefreshUiState();
+    }
+
+    private void OnClearLogsClick(object sender, RoutedEventArgs e) => TxtLogs.Clear();
 
     private async void OnToggleVirtualBtClick(object sender, RoutedEventArgs e)
     {
@@ -244,11 +477,11 @@ public partial class MainWindow : Window
         BtnInstallDriver.IsEnabled = false;
         try
         {
-            await UsbipWin2Manager.InstallDriverViaWingetAsync();
+            await InstallMissingComponentsAsync();
         }
         catch (Exception ex)
         {
-            System.Windows.MessageBox.Show(this, $"Lỗi gọi winget: {ex.Message}", "Blueipooth", MessageBoxButton.OK, MessageBoxImage.Warning);
+            System.Windows.MessageBox.Show(this, ex.Message, "Thiết lập Blueipooth", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
         finally
         {
@@ -257,7 +490,66 @@ public partial class MainWindow : Window
         }
     }
 
+    private async Task InstallMissingComponentsAsync()
+    {
+        var messages = new List<string>();
+        if (!UsbipWin2Manager.IsDriverInstalled)
+        {
+            try
+            {
+                bool installed = await UsbipWin2Manager.InstallDriverViaWingetAsync();
+                messages.Add(installed
+                    ? "Đã cài usbip-win2."
+                    : "Chưa cài được usbip-win2. Kiểm tra winget hoặc quyền quản trị.");
+            }
+            catch (Exception ex)
+            {
+                messages.Add($"Chưa cài được usbip-win2: {ex.Message}");
+            }
+        }
+
+        if (!VirtualAudioCableInstaller.IsInstalled)
+        {
+            try
+            {
+                var cableResult = await VirtualAudioCableInstaller.InstallAsync();
+                messages.Add(cableResult.Message);
+            }
+            catch (Exception ex)
+            {
+                messages.Add($"Chưa cài được VB-CABLE: {ex.Message}");
+            }
+        }
+
+        if (UsbipWin2Manager.IsDriverInstalled && !_coordinator.UsbIp.IsDriverAttached)
+        {
+            var attachResult = await _coordinator.SetVirtualBluetoothCardEnabledAsync(true);
+            messages.Add(attachResult.Message);
+        }
+
+        RefreshUiState();
+        if (messages.Count > 0)
+        {
+            bool hasFailure = messages.Any(m =>
+                m.Contains("chưa", StringComparison.OrdinalIgnoreCase) ||
+                m.Contains("failed", StringComparison.OrdinalIgnoreCase) ||
+                m.Contains("không", StringComparison.OrdinalIgnoreCase));
+            System.Windows.MessageBox.Show(
+                this,
+                string.Join(Environment.NewLine + Environment.NewLine, messages),
+                "Thiết lập Blueipooth",
+                MessageBoxButton.OK,
+                hasFailure ? MessageBoxImage.Warning : MessageBoxImage.Information);
+        }
+    }
+
     private void OnRefreshQrClick(object sender, RoutedEventArgs e) => RenderQrCode();
+
+    private void OnToggleConnectionPauseClick(object sender, RoutedEventArgs e)
+    {
+        _coordinator.SetConnectionPaused(!_coordinator.IsConnectionPaused);
+        RefreshUiState();
+    }
 
     private async void OnAudioModeChanged(object sender, RoutedEventArgs e)
     {
@@ -284,24 +576,69 @@ public partial class MainWindow : Window
         _coordinator.AudioEngine.IsMicNoiseFilterEnabled = ChkMicNoiseFilter.IsChecked == true;
     }
 
-    private void OnOpenDeviceManagerClick(object sender, RoutedEventArgs e) =>
-        Process.Start(new ProcessStartInfo("devmgmt.msc") { UseShellExecute = true });
-
     private void OnOpenBtSettingsClick(object sender, RoutedEventArgs e) =>
         Process.Start(new ProcessStartInfo("ms-settings:bluetooth") { UseShellExecute = true });
 
     private void OnMinimizeToTrayClick(object sender, RoutedEventArgs e) => Hide();
 
+    // --- Settings Popup Handlers ---
+    private void OnOpenSettingsClick(object sender, RoutedEventArgs e)
+    {
+        SettingsOverlay.Visibility = Visibility.Visible;
+        SettingsOverlay.Opacity = 0;
+        SettingsModalScale.ScaleX = 0.94;
+        SettingsModalScale.ScaleY = 0.94;
+
+        var fade = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(160));
+        var scale = new DoubleAnimation(0.94, 1.0, TimeSpan.FromMilliseconds(160))
+        {
+            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+        };
+        SettingsOverlay.BeginAnimation(OpacityProperty, fade);
+        SettingsModalScale.BeginAnimation(ScaleTransform.ScaleXProperty, scale);
+        SettingsModalScale.BeginAnimation(ScaleTransform.ScaleYProperty, scale);
+    }
+
+    private void OnCloseSettingsClick(object sender, RoutedEventArgs e) =>
+        SettingsOverlay.Visibility = Visibility.Collapsed;
+
+    private void OnSettingsBackdropMouseDown(object sender, MouseButtonEventArgs e) =>
+        SettingsOverlay.Visibility = Visibility.Collapsed;
+
+    private void OnSettingsCardMouseDown(object sender, MouseButtonEventArgs e) =>
+        e.Handled = true;
+
+    private void OnSettingChanged(object sender, RoutedEventArgs e)
+    {
+        if (!_uiInitialized) return;
+
+        _settings.Theme = RbThemeOcean.IsChecked == true
+            ? AppThemeMode.Ocean
+            : RbThemeLight.IsChecked == true
+                ? AppThemeMode.Light
+                : AppThemeMode.Midnight;
+
+        _settings.ExpandLogsByDefault = ChkExpandLogsDefault.IsChecked == true;
+        _settings.CloseBehavior = RbCloseExit.IsChecked == true
+            ? WindowCloseBehavior.ExitApplication
+            : WindowCloseBehavior.MinimizeToTray;
+
+        ApplyTheme(_settings.Theme);
+        _settings.Save();
+    }
+
+    private async void OnExitApplicationClick(object sender, RoutedEventArgs e) => await ShutdownCleanlyAsync();
+
     private async void OnMainWindowClosing(object? sender, System.ComponentModel.CancelEventArgs e)
     {
-        if (!_isExplicitExit)
+        if (!_isExplicitExit && _settings.CloseBehavior == WindowCloseBehavior.MinimizeToTray)
         {
             e.Cancel = true;
             Hide();
             _trayIcon?.ShowBalloonTip(
                 2000,
                 "Blueipooth đang chạy ngầm",
-                "Card Bluetooth ảo & Cầu nối âm thanh vẫn đang giữ kết nối. Nhấp đúp biểu tượng khay hệ thống để mở lại.",
+                "Kết nối vẫn hoạt động. Dùng nút ⚙ Cài đặt hoặc biểu tượng khay hệ thống để thoát hẳn.",
                 System.Windows.Forms.ToolTipIcon.Info);
             return;
         }

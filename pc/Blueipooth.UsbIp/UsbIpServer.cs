@@ -40,6 +40,9 @@ public sealed class UsbIpServer : IAsyncDisposable
     public long TotalHciEvents => Interlocked.Read(ref _totalHciEvents);
 
     public event Action<bool>? DriverAttachmentChanged;
+    public event Action<string>? DiagLog;
+
+    private void LogDiag(string msg) => DiagLog?.Invoke(msg);
 
     private sealed record PendingInUrb(
         uint SeqNum,
@@ -145,14 +148,14 @@ public sealed class UsbIpServer : IAsyncDisposable
 
         using var sessionCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
 
-        async Task SendRetSubmitAsync(uint seqNum, int status, ReadOnlyMemory<byte> inData, int isoPackets = 0)
+        async Task SendRetSubmitAsync(uint seqNum, int status, ReadOnlyMemory<byte> inData, int isoPackets = 0, int? actualLengthOverride = null)
         {
             byte[] pkt = new byte[48 + inData.Length];
             BinaryPrimitives.WriteUInt32BigEndian(pkt.AsSpan(0, 4), UsbIpRetSubmit);
             BinaryPrimitives.WriteUInt32BigEndian(pkt.AsSpan(4, 4), seqNum);
-            // devid (8..12), direction (12..16), ep (16..20) = 0 per Linux stub_tx spec
+            // USB/IP server replies must zero devid, direction, and endpoint.
             BinaryPrimitives.WriteInt32BigEndian(pkt.AsSpan(20, 4), status);
-            BinaryPrimitives.WriteInt32BigEndian(pkt.AsSpan(24, 4), inData.Length);
+            BinaryPrimitives.WriteInt32BigEndian(pkt.AsSpan(24, 4), actualLengthOverride ?? inData.Length);
             BinaryPrimitives.WriteInt32BigEndian(pkt.AsSpan(28, 4), 0); // start_frame
             BinaryPrimitives.WriteInt32BigEndian(pkt.AsSpan(32, 4), isoPackets);
             BinaryPrimitives.WriteInt32BigEndian(pkt.AsSpan(36, 4), 0); // error_count
@@ -276,6 +279,7 @@ public sealed class UsbIpServer : IAsyncDisposable
                 if (cmd == UsbIpCmdUnlink)
                 {
                     uint targetSeq = BinaryPrimitives.ReadUInt32BigEndian(urbHdr.AsSpan(20, 4));
+                    LogDiag($"URB UNLINK seq={seqNum} target={targetSeq}");
                     unlinkedSeqs[targetSeq] = 1;
 
                     byte[] retUnlink = new byte[48];
@@ -320,7 +324,15 @@ public sealed class UsbIpServer : IAsyncDisposable
 
                 if (ep == 0)
                 {
-                    await HandleEndpoint0ControlAsync(setup, direction, transferBufLen, outData, seqNum, h4Stream, SendRetSubmitAsync, sessionCts.Token)
+                    await HandleEndpoint0ControlAsync(
+                            setup,
+                            direction,
+                            transferBufLen,
+                            outData,
+                            seqNum,
+                            h4Stream,
+                            SendRetSubmitAsync,
+                            sessionCts.Token)
                         .ConfigureAwait(false);
                 }
                 else if (ep == 1 && direction == 1) // Interrupt IN -> HCI Events
@@ -335,7 +347,7 @@ public sealed class UsbIpServer : IAsyncDisposable
                     Buffer.BlockCopy(outData, 0, h4Acl, 1, outData.Length);
                     await h4Stream.WriteAsync(h4Acl, sessionCts.Token).ConfigureAwait(false);
                     await h4Stream.FlushAsync(sessionCts.Token).ConfigureAwait(false);
-                    await SendRetSubmitAsync(seqNum, 0, ReadOnlyMemory<byte>.Empty).ConfigureAwait(false);
+                    await SendRetSubmitAsync(seqNum, 0, ReadOnlyMemory<byte>.Empty, 0, outData.Length).ConfigureAwait(false);
                 }
                 else if (ep == 2 && direction == 1) // Bulk IN -> HCI ACL RX
                 {
@@ -344,6 +356,7 @@ public sealed class UsbIpServer : IAsyncDisposable
                 }
                 else
                 {
+                    LogDiag($"URB OTHER ep={ep} dir={direction} seq={seqNum} len={transferBufLen} iso={numIsoPackets}");
                     // Isochronous SCO or auxiliary endpoints -> acknowledge cleanly
                     await SendRetSubmitAsync(seqNum, 0, ReadOnlyMemory<byte>.Empty, Math.Max(0, numIsoPackets)).ConfigureAwait(false);
                 }
@@ -366,7 +379,7 @@ public sealed class UsbIpServer : IAsyncDisposable
         byte[] outData,
         uint seqNum,
         Stream h4Stream,
-        Func<uint, int, ReadOnlyMemory<byte>, int, Task> sendRetSubmitAsync,
+        Func<uint, int, ReadOnlyMemory<byte>, int, int?, Task> sendRetSubmitAsync,
         CancellationToken ct)
     {
         byte bmRequestType = setup[0];
@@ -377,13 +390,18 @@ public sealed class UsbIpServer : IAsyncDisposable
         // Class-specific Host-to-Device request on EP0 = Bluetooth HCI Command! (USB BT Spec)
         if ((bmRequestType & 0x60) == 0x20 && direction == 0)
         {
-            Interlocked.Increment(ref _totalHciCommands);
+            long cmdCount = Interlocked.Increment(ref _totalHciCommands);
+            ushort opcode = outData.Length >= 2 ? BinaryPrimitives.ReadUInt16LittleEndian(outData.AsSpan(0, 2)) : (ushort)0;
+            if (cmdCount <= 3 || opcode is 0x0401 or 0x200C or 0x2042)
+            {
+                LogDiag($"USB->H4 Cmd #{cmdCount} opcode=0x{opcode:X4} len={outData.Length}");
+            }
             byte[] h4Cmd = new byte[1 + outData.Length];
             h4Cmd[0] = 0x01; // H4 HCI Command Indicator
             Buffer.BlockCopy(outData, 0, h4Cmd, 1, outData.Length);
             await h4Stream.WriteAsync(h4Cmd, ct).ConfigureAwait(false);
             await h4Stream.FlushAsync(ct).ConfigureAwait(false);
-            await sendRetSubmitAsync(seqNum, 0, ReadOnlyMemory<byte>.Empty, 0).ConfigureAwait(false);
+            await sendRetSubmitAsync(seqNum, 0, ReadOnlyMemory<byte>.Empty, 0, outData.Length).ConfigureAwait(false);
             return;
         }
 
@@ -403,12 +421,12 @@ public sealed class UsbIpServer : IAsyncDisposable
             if (desc is null)
             {
                 // Unsupported optional descriptor (e.g., Device Qualifier 0x06) -> STALL (-EPIPE = -32)
-                await sendRetSubmitAsync(seqNum, -32, ReadOnlyMemory<byte>.Empty, 0).ConfigureAwait(false);
+                await sendRetSubmitAsync(seqNum, -32, ReadOnlyMemory<byte>.Empty, 0, null).ConfigureAwait(false);
                 return;
             }
 
             int maxLen = Math.Min(desc.Length, Math.Min(wLength, transferBufLen));
-            await sendRetSubmitAsync(seqNum, 0, desc.AsMemory(0, maxLen), 0).ConfigureAwait(false);
+            await sendRetSubmitAsync(seqNum, 0, desc.AsMemory(0, maxLen), 0, null).ConfigureAwait(false);
             return;
         }
 
@@ -416,7 +434,7 @@ public sealed class UsbIpServer : IAsyncDisposable
         if ((bmRequestType & 0x80) != 0 && bRequest == 0x00)
         {
             byte[] statusBytes = [0x00, 0x00];
-            await sendRetSubmitAsync(seqNum, 0, statusBytes.AsMemory(0, Math.Min(2, transferBufLen)), 0).ConfigureAwait(false);
+            await sendRetSubmitAsync(seqNum, 0, statusBytes.AsMemory(0, Math.Min(2, transferBufLen)), 0, null).ConfigureAwait(false);
             return;
         }
 
@@ -424,12 +442,12 @@ public sealed class UsbIpServer : IAsyncDisposable
         if (bmRequestType == 0x80 && bRequest == 0x08)
         {
             byte[] cfg = [0x01];
-            await sendRetSubmitAsync(seqNum, 0, cfg.AsMemory(0, Math.Min(1, transferBufLen)), 0).ConfigureAwait(false);
+            await sendRetSubmitAsync(seqNum, 0, cfg.AsMemory(0, Math.Min(1, transferBufLen)), 0, null).ConfigureAwait(false);
             return;
         }
 
         // SET_CONFIGURATION (0x09), SET_INTERFACE (0x0B), CLEAR_FEATURE (0x01), SET_FEATURE (0x03)
-        await sendRetSubmitAsync(seqNum, 0, ReadOnlyMemory<byte>.Empty, 0).ConfigureAwait(false);
+        await sendRetSubmitAsync(seqNum, 0, ReadOnlyMemory<byte>.Empty, 0, direction == 0 ? outData.Length : null).ConfigureAwait(false);
     }
 
     public static byte[] BuildDevlistReply()

@@ -11,10 +11,12 @@
 
 ## Khởi chạy nhanh
 
-### 1. Cài đặt công cụ & Driver WHQL `usbip-win2` (Chạy 1 lần đầu)
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\setup-dev.ps1
-```
+### 1. Thiết lập PC lần đầu
+Mở ứng dụng Windows. Nếu thiếu thành phần, Blueipooth sẽ hỏi để tự tải/cài driver `usbip-win2` và VB-CABLE chính thức. Chấp thuận UAC; VB-CABLE có thể yêu cầu khởi động lại Windows. VB-CABLE là donationware của VB-Audio (`vb-cable.com`).
+
+`BthUsb.sys` đã có sẵn trong Windows. Sau khi cài `usbip-win2`, bấm **Bật Bluetooth trên PC** để gắn adapter ảo.
+
+`scripts/setup-dev.ps1` vẫn dùng để cài công cụ phát triển (Python/Bumble và các phụ thuộc SDK).
 
 ### 2. Biên dịch & Chạy toàn bộ Kiểm thử Tự động (PC `.exe` + Bumble + Android `.apk`)
 ```powershell
