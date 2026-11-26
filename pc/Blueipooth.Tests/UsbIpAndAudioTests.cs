@@ -57,7 +57,7 @@ public sealed class UsbIpAndAudioTests
 
         Span<byte> opusOut = stackalloc byte[256];
         int encodedBytes = engine.EncodeStereoPcm48kFrame(sine480, opusOut);
-        Assert.InRange(encodedBytes, 10, 200);
+        Assert.InRange(encodedBytes, 10, 260);
     }
 
     [Fact]

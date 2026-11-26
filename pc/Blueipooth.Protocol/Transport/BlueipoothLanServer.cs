@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Security;
@@ -113,10 +114,42 @@ public sealed class BlueipoothLanServer : IAsyncDisposable
     {
         var socket = _udpSocket;
         var remote = _peerMediaEndPoint;
-        if (socket is null || remote is null || CurrentPhone is null)
+        if (CurrentPhone is null)
             return;
 
         uint seq = Interlocked.Increment(ref _txSequence);
+
+        // If connected over USB ADB tunnel (127.0.0.1) and no LAN UDP endpoint has punched through,
+        // stream raw binary Opus frames directly over the <1ms physical USB TLS tunnel!
+        if (remote is null || IPAddress.IsLoopback(remote.Address))
+        {
+            var stream = _activeControlStream;
+            if (stream is null || !_controlWriteLock.Wait(45))
+                return;
+
+            try
+            {
+                int payloadLen = 4 + opusFrame.Length;
+                Span<byte> usbFrame = stackalloc byte[5 + payloadLen];
+                BinaryPrimitives.WriteUInt32BigEndian(usbFrame[..4], (uint)payloadLen);
+                usbFrame[4] = (byte)ControlMessageType.UsbAudioOpus;
+                BinaryPrimitives.WriteUInt32BigEndian(usbFrame.Slice(5, 4), seq);
+                opusFrame.CopyTo(usbFrame[9..]);
+                stream.Write(usbFrame);
+                stream.Flush();
+            }
+            catch
+            {
+                // Ignore transient USB stream contention
+            }
+            finally
+            {
+                _controlWriteLock.Release();
+            }
+            return;
+        }
+
+        if (socket is null) return;
         ulong tsUs = (ulong)(Stopwatch.GetTimestamp() * 1_000_000.0 / Stopwatch.Frequency);
         var hdr = new MediaPacketHeader(
             MediaPacketHeader.MagicValue,

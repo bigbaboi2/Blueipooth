@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Concentus;
 using Concentus.Enums;
 using NAudio.CoreAudioApi;
@@ -19,8 +20,12 @@ public sealed class WasapiOpusAudioEngine : IDisposable, IMMNotificationClient
     private readonly AdaptiveJitterBuffer _micJitterBuffer = new(targetDepthFrames: 3, maxDepthFrames: 8);
     private readonly SbcDecoder _sbcDecoder = new();
 
-    private WasapiLoopbackCapture? _loopbackCapture;
     private MMDevice? _captureDevice;
+    private AudioClient? _loopbackAudioClient;
+    private AudioCaptureClient? _loopbackCaptureClient;
+    private WaveFormat? _loopbackMixFormat;
+    private Thread? _loopbackThread;
+    private CancellationTokenSource? _loopbackCts;
     private MMDeviceEnumerator? _deviceEnumerator;
     private string? _currentRenderDeviceId;
     private readonly object _captureLock = new();
@@ -63,6 +68,19 @@ public sealed class WasapiOpusAudioEngine : IDisposable, IMMNotificationClient
     private float _hpPrevOut;
     private float _gateEnvelope;
 
+    // Stateful phase-continuous resampler across WASAPI chunks (eliminates 100Hz chunk-boundary clicks on 44.1kHz devices)
+    private int _resampleSrcRate;
+    private double _resamplePhase;
+    private float _resamplePrevL;
+    private float _resamplePrevR;
+    private bool _resampleHasPrev;
+
+    [DllImport("winmm.dll")]
+    private static extern uint timeBeginPeriod(uint uPeriod);
+
+    [DllImport("winmm.dll")]
+    private static extern uint timeEndPeriod(uint uPeriod);
+
     public event Action<ReadOnlyMemory<byte>>? EncodedStereoOpusFrameReady;
     public event Action<double>? SpeakerPeakLevelChanged;
     public event Action<double>? MicPeakLevelChanged;
@@ -100,15 +118,131 @@ public sealed class WasapiOpusAudioEngine : IDisposable, IMMNotificationClient
     private void StartLoopbackInternal()
     {
         _accumCount = 0;
+        _resampleHasPrev = false;
+        _resamplePhase = 0;
         _captureDevice = _deviceEnumerator?.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
         _currentRenderDeviceId = _captureDevice?.ID;
-        _loopbackCapture = _captureDevice is not null
-            ? new WasapiLoopbackCapture(_captureDevice)
-            : new WasapiLoopbackCapture();
-        _loopbackCapture.DataAvailable += OnWasapiDataAvailable;
-        _loopbackCapture.RecordingStopped += (_, _) => { };
-        _loopbackCapture.StartRecording();
+        if (_captureDevice is null) return;
+
+        AudioClient audioClient = _captureDevice.AudioClient;
+        WaveFormat mixFormat = audioClient.MixFormat;
+        const long hns20Ms = 20 * 10_000; // 20ms buffer, 10ms native WASAPI shared period
+
+        EventWaitHandle? frameEvent = null;
+        bool useEvent = false;
+        try
+        {
+            frameEvent = new EventWaitHandle(false, EventResetMode.AutoReset);
+            audioClient.Initialize(
+                AudioClientShareMode.Shared,
+                AudioClientStreamFlags.Loopback | AudioClientStreamFlags.EventCallback,
+                hns20Ms,
+                0,
+                mixFormat,
+                Guid.Empty);
+            audioClient.SetEventHandle(frameEvent.SafeWaitHandle.DangerousGetHandle());
+            useEvent = true;
+        }
+        catch
+        {
+            frameEvent?.Dispose();
+            frameEvent = null;
+            audioClient.Dispose();
+            audioClient = _captureDevice.AudioClient;
+            audioClient.Initialize(
+                AudioClientShareMode.Shared,
+                AudioClientStreamFlags.Loopback,
+                hns20Ms,
+                0,
+                mixFormat,
+                Guid.Empty);
+        }
+
+        _loopbackMixFormat = mixFormat;
+        _loopbackAudioClient = audioClient;
+        _loopbackCaptureClient = audioClient.AudioCaptureClient;
+        var cts = new CancellationTokenSource();
+        _loopbackCts = cts;
+
+        audioClient.Start();
         IsStreamingSpeaker = true;
+
+        _loopbackThread = new Thread(() => RunLowLatencyLoopbackLoop(audioClient, _loopbackCaptureClient, mixFormat, frameEvent, useEvent, cts.Token))
+        {
+            IsBackground = true,
+            Name = "Blueipooth-WasapiLoopback",
+            Priority = ThreadPriority.Highest
+        };
+        _loopbackThread.Start();
+    }
+
+    private void RunLowLatencyLoopbackLoop(
+        AudioClient audioClient,
+        AudioCaptureClient captureClient,
+        WaveFormat mixFormat,
+        EventWaitHandle? frameEvent,
+        bool useEvent,
+        CancellationToken ct)
+    {
+        byte[] managedBuf = Array.Empty<byte>();
+        try { _ = timeBeginPeriod(1); } catch { }
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                if (useEvent && frameEvent is not null)
+                {
+                    frameEvent.WaitOne(10);
+                }
+                else
+                {
+                    Thread.Sleep(5);
+                }
+
+                if (ct.IsCancellationRequested) break;
+
+                int packetFrames = captureClient.GetNextPacketSize();
+                while (packetFrames > 0 && !ct.IsCancellationRequested)
+                {
+                    IntPtr dataPtr = captureClient.GetBuffer(out int numFrames, out AudioClientBufferFlags flags);
+                    int byteCount = numFrames * mixFormat.BlockAlign;
+                    if (byteCount > 0)
+                    {
+                        if (managedBuf.Length < byteCount)
+                        {
+                            managedBuf = new byte[byteCount];
+                        }
+
+                        if ((flags & AudioClientBufferFlags.Silent) != 0)
+                        {
+                            Array.Clear(managedBuf, 0, byteCount);
+                        }
+                        else
+                        {
+                            Marshal.Copy(dataPtr, managedBuf, 0, byteCount);
+                        }
+
+                        Span<float> converted = ConvertWasapiChunkToStereo48k(managedBuf.AsSpan(0, byteCount), mixFormat);
+                        if (!converted.IsEmpty)
+                        {
+                            ProcessStereo48kChunk(converted);
+                        }
+                    }
+
+                    captureClient.ReleaseBuffer(numFrames);
+                    packetFrames = captureClient.GetNextPacketSize();
+                }
+            }
+        }
+        catch
+        {
+            // Device removed or stopped
+        }
+        finally
+        {
+            try { _ = timeEndPeriod(1); } catch { }
+            frameEvent?.Dispose();
+        }
     }
 
     public void StopSpeakerCapture()
@@ -128,13 +262,19 @@ public sealed class WasapiOpusAudioEngine : IDisposable, IMMNotificationClient
 
     private void StopLoopbackInternal()
     {
-        if (_loopbackCapture is not null)
-        {
-            try { _loopbackCapture.StopRecording(); } catch { }
-            _loopbackCapture.DataAvailable -= OnWasapiDataAvailable;
-            _loopbackCapture.Dispose();
-            _loopbackCapture = null;
-        }
+        _loopbackCts?.Cancel();
+        try { _loopbackThread?.Join(300); } catch { }
+        _loopbackThread = null;
+        _loopbackCts?.Dispose();
+        _loopbackCts = null;
+
+        try { _loopbackAudioClient?.Stop(); } catch { }
+        _loopbackCaptureClient?.Dispose();
+        _loopbackCaptureClient = null;
+        _loopbackAudioClient?.Dispose();
+        _loopbackAudioClient = null;
+        _loopbackMixFormat = null;
+
         _captureDevice?.Dispose();
         _captureDevice = null;
     }
@@ -285,17 +425,6 @@ public sealed class WasapiOpusAudioEngine : IDisposable, IMMNotificationClient
         ProcessStereo48kChunk(stereo48k);
     }
 
-    private void OnWasapiDataAvailable(object? sender, WaveInEventArgs e)
-    {
-        if (e.BytesRecorded == 0 || _loopbackCapture is null) return;
-
-        WaveFormat fmt = _loopbackCapture.WaveFormat;
-        Span<float> converted = ConvertWasapiChunkToStereo48k(e.Buffer.AsSpan(0, e.BytesRecorded), fmt);
-        if (converted.IsEmpty) return;
-
-        ProcessStereo48kChunk(converted);
-    }
-
     private void ProcessStereo48kChunk(ReadOnlySpan<float> converted)
     {
 
@@ -351,7 +480,7 @@ public sealed class WasapiOpusAudioEngine : IDisposable, IMMNotificationClient
 
     private static readonly Guid IeeeFloatSubType = new("00000003-0000-0010-8000-00aa00389b71");
 
-    private static float[] ConvertWasapiChunkToStereo48k(ReadOnlySpan<byte> rawBytes, WaveFormat fmt)
+    private float[] ConvertWasapiChunkToStereo48k(ReadOnlySpan<byte> rawBytes, WaveFormat fmt)
     {
         int srcChannels = Math.Max(1, fmt.Channels);
         int bytesPerSample = fmt.BitsPerSample / 8;
@@ -382,7 +511,57 @@ public sealed class WasapiOpusAudioEngine : IDisposable, IMMNotificationClient
             return srcStereo;
         }
 
-        return ResampleStereo(srcStereo, fmt.SampleRate);
+        return ResampleStereoStateful(srcStereo, fmt.SampleRate);
+    }
+
+    private float[] ResampleStereoStateful(float[] srcStereo, int srcRate)
+    {
+        int srcFrames = srcStereo.Length / 2;
+        if (srcFrames <= 0) return [];
+
+        if (_resampleSrcRate != srcRate || !_resampleHasPrev)
+        {
+            _resampleSrcRate = srcRate;
+            _resamplePhase = 0.0;
+            _resamplePrevL = srcStereo[0];
+            _resamplePrevR = srcStereo[1];
+            _resampleHasPrev = true;
+        }
+
+        double step = (double)srcRate / TargetSampleRate;
+        int maxDstFrames = (int)Math.Ceiling((srcFrames + 1.0) / step) + 2;
+        float[] dstScratch = new float[maxDstFrames * 2];
+        int dstCount = 0;
+
+        while (_resamplePhase < srcFrames - 1)
+        {
+            float left, right;
+            if (_resamplePhase < 0.0)
+            {
+                float frac = (float)(_resamplePhase + 1.0);
+                left = _resamplePrevL + (srcStereo[0] - _resamplePrevL) * frac;
+                right = _resamplePrevR + (srcStereo[1] - _resamplePrevR) * frac;
+            }
+            else
+            {
+                int i0 = (int)_resamplePhase;
+                int i1 = i0 + 1;
+                float frac = (float)(_resamplePhase - i0);
+                left = srcStereo[i0 * 2] + (srcStereo[i1 * 2] - srcStereo[i0 * 2]) * frac;
+                right = srcStereo[i0 * 2 + 1] + (srcStereo[i1 * 2 + 1] - srcStereo[i0 * 2 + 1]) * frac;
+            }
+
+            dstScratch[dstCount * 2] = left;
+            dstScratch[dstCount * 2 + 1] = right;
+            dstCount++;
+            _resamplePhase += step;
+        }
+
+        _resamplePrevL = srcStereo[(srcFrames - 1) * 2];
+        _resamplePrevR = srcStereo[(srcFrames - 1) * 2 + 1];
+        _resamplePhase -= srcFrames;
+
+        return dstScratch.AsSpan(0, dstCount * 2).ToArray();
     }
 
     private static float[] ResampleStereo(float[] srcStereo, int srcRate)

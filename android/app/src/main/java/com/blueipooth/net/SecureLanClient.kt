@@ -47,7 +47,8 @@ class SecureLanClient(
     private val onBleAdvCommand: (Boolean, String) -> Unit,
     private val onAudioConfig: (mode: String, micEnabled: Boolean, jitterBufferMs: Int) -> Unit,
     private val onStereoOpusPacket: (seq: Long, opus: ByteArray) -> Unit,
-    private val onDiscoveredHostsUpdated: (List<DiscoveredPcHost>) -> Unit
+    private val onDiscoveredHostsUpdated: (List<DiscoveredPcHost>) -> Unit,
+    private val onMediaControlCommand: (String) -> Unit = {}
 ) {
     private val prefs = context.getSharedPreferences("blueipooth_pairing", Context.MODE_PRIVATE)
     private val peerId: String = prefs.getString("peer_id", null) ?: UUID.randomUUID().toString().also {
@@ -134,6 +135,7 @@ class SecureLanClient(
     private fun sendUdpKeepalivePunch() {
         val sock = udpSocket ?: return
         val dest = remoteMediaAddress ?: return
+        if (dest.address?.isLoopbackAddress == true) return
         val cipher = mediaCipher ?: return
         ioPool.execute {
             try {
@@ -259,15 +261,17 @@ class SecureLanClient(
             ?: initialKey16
             ?: throw IllegalStateException("Missing media key")
 
-        // Persist trusted PC for seamless auto-reconnect!
-        prefs.edit()
+        // Persist trusted PC for seamless auto-reconnect (never overwrite LAN IP with 127.0.0.1!)
+        val editor = prefs.edit()
             .putString("saved_fp", expectedCertFpHex)
             .putString("saved_pc_name", pcName)
             .putString("saved_reconnect_token", reconnectToken)
-            .putString("saved_last_ip", chosenIp)
             .putInt("saved_ctrl_port", controlPort)
             .putInt("saved_udp_port", serverUdpPort)
-            .apply()
+        if (chosenIp != "127.0.0.1") {
+            editor.putString("saved_last_ip", chosenIp)
+        }
+        editor.apply()
 
         mediaCipher = MediaFrameCipher(sessionKey)
         val mediaIp = if (chosenIp == "127.0.0.1") {
@@ -277,20 +281,33 @@ class SecureLanClient(
         }
         remoteMediaAddress = InetSocketAddress(mediaIp, serverUdpPort)
 
-        // Send an authenticated 0-byte UDP keepalive so PC immediately learns our Wi-Fi IP
-        // even when Control is running over USB Cable (127.0.0.1)!
-        sendUdpKeepalivePunch()
+        // Send an authenticated 0-byte UDP keepalive if we know a real LAN IP
+        if (mediaIp != "127.0.0.1") {
+            sendUdpKeepalivePunch()
+        }
 
         onConnectionState(true, pcName, chosenIp, 0.0)
 
         // Start UDP Media Receiver loop
         ioPool.execute { udpReceiveLoop(udp) }
 
-        // Read Control Frame loop
+        // Read Control & Direct USB Audio Frame loop
         try {
             while (running && !ssl.isClosed) {
-                val frame = ControlFrameCodec.readFrame(dIn) ?: break
-                handleControlFrame(frame.first, frame.second, pcName, chosenIp)
+                val rawFrame = ControlFrameCodec.readRawFrame(dIn) ?: break
+                if (rawFrame.first == ControlMessageType.USB_AUDIO_OPUS) {
+                    val body = rawFrame.second
+                    if (body.size > 4) {
+                        val seq = ((body[0].toLong() and 0xFF) shl 24) or
+                            ((body[1].toLong() and 0xFF) shl 16) or
+                            ((body[2].toLong() and 0xFF) shl 8) or
+                            (body[3].toLong() and 0xFF)
+                        val opus = body.copyOfRange(4, body.size)
+                        onStereoOpusPacket(seq, opus)
+                    }
+                } else {
+                    handleControlFrame(rawFrame.first, String(rawFrame.second, Charsets.UTF_8), pcName, chosenIp)
+                }
             }
         } catch (e: Exception) {
             android.util.Log.w("BlueipoothNet", "Control loop closed: ${e.message}", e)
@@ -333,6 +350,13 @@ class SecureLanClient(
                     obj.optBoolean("micEnabled", true),
                     obj.optInt("jitterBufferMs", 30)
                 )
+            }
+            ControlMessageType.MEDIA_CONTROL -> {
+                val obj = JSONObject(json)
+                val key = obj.optString("key", "")
+                if (key.isNotBlank()) {
+                    onMediaControlCommand(key)
+                }
             }
         }
     }

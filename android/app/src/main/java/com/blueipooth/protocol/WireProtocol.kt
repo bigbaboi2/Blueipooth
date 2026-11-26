@@ -28,6 +28,7 @@ object ControlMessageType {
     const val AUDIO_CONFIG: Byte = 0x21
     const val MEDIA_CONTROL: Byte = 0x22
     const val DEVICE_STATUS: Byte = 0x23
+    const val USB_AUDIO_OPUS: Byte = 0x24
 }
 
 data class QrPairingInfo(
@@ -95,7 +96,7 @@ object ControlFrameCodec {
         }
     }
 
-    fun readFrame(input: DataInputStream): Pair<Byte, String>? {
+    fun readRawFrame(input: DataInputStream): Pair<Byte, ByteArray>? {
         val length = try {
             input.readInt()
         } catch (_: EOFException) {
@@ -107,7 +108,12 @@ object ControlFrameCodec {
         if (length > 0) {
             input.readFully(buf)
         }
-        return type to String(buf, Charsets.UTF_8)
+        return type to buf
+    }
+
+    fun readFrame(input: DataInputStream): Pair<Byte, String>? {
+        val raw = readRawFrame(input) ?: return null
+        return raw.first to String(raw.second, Charsets.UTF_8)
     }
 }
 

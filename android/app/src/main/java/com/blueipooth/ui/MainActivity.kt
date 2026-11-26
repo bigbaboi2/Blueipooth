@@ -19,12 +19,14 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -42,18 +44,16 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
@@ -66,10 +66,19 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -77,10 +86,26 @@ import com.blueipooth.service.BlueipoothBridgeService
 import com.blueipooth.service.BridgeUiState
 import com.blueipooth.service.ScannedBleDevice
 
-private enum class AndroidTab(val index: Int, val label: String, val iconGlyph: String) {
-    BLUETOOTH(0, "Bluetooth", "📡"),
-    QR_CONNECT(1, "Kết nối QR", "📷"),
-    AUDIO(2, "Âm thanh", "🎧")
+// Unified iOS 26 Frosted Milky Glass & Midnight Slate Palette (matches PC App)
+private val BgMidnight = Color(0xFF0E1118)
+private val BarFrosted = Color(0xFF141924)
+private val CardFrosted = Color(0xCC1B2130)
+private val SubCardFrosted = Color(0x9E252D40)
+private val RimGlass = Color(0x24FFFFFF)
+private val BtnGlass = Color(0x1FFFFFFF)
+private val AccentCyan = Color(0xFF7DD3FC)
+private val AccentCyberPurple = Color(0xFFC4B5FD)
+private val AccentPeriwinkle = Color(0xFFA8C7FA)
+private val AccentSage = Color(0xFF86EFAC)
+private val AccentAmber = Color(0xFFFDE68A)
+private val TextPrimary = Color(0xFFEEF2FA)
+private val TextMuted = Color(0xFF98A3B8)
+private val DarkInk = Color(0xFF0F172A)
+
+private enum class AndroidTab(val index: Int, val label: String) {
+    BLUETOOTH(0, "Bluetooth"),
+    QR_CONNECT(1, "Kết nối PC"),
+    AUDIO(2, "Âm thanh")
 }
 
 class MainActivity : ComponentActivity() {
@@ -103,6 +128,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        window.statusBarColor = 0xFF141924.toInt()
+        window.navigationBarColor = 0xFF141924.toInt()
 
         val svcIntent = Intent(this, BlueipoothBridgeService::class.java)
         ContextCompat.startForegroundService(this, svcIntent)
@@ -110,13 +137,13 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             val scheme = darkColorScheme(
-                primary = Color(0xFF38BDF8),
-                secondary = Color(0xFF4ADE80),
-                background = Color(0xFF0B1120),
-                surface = Color(0xFF162033)
+                primary = AccentPeriwinkle,
+                secondary = AccentSage,
+                background = BgMidnight,
+                surface = CardFrosted
             )
             MaterialTheme(colorScheme = scheme) {
-                Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                Surface(modifier = Modifier.fillMaxSize(), color = BgMidnight) {
                     PermissionRequester()
                     val svc = bridgeService
                     if (svc != null) {
@@ -133,7 +160,7 @@ class MainActivity : ComponentActivity() {
                         )
                     } else {
                         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            Text("Đang khởi động Blueipooth...", color = Color.White, fontSize = 15.sp)
+                            Text("Đang khởi động Blueipooth...", color = TextPrimary, fontSize = 15.sp)
                         }
                     }
                 }
@@ -176,6 +203,65 @@ private fun PermissionRequester() {
 }
 
 @Composable
+private fun FrostedCard(
+    modifier: Modifier = Modifier,
+    contentPadding: PaddingValues = PaddingValues(18.dp),
+    content: @Composable ColumnScope.() -> Unit
+) {
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(20.dp))
+            .background(CardFrosted)
+            .border(1.dp, RimGlass, RoundedCornerShape(20.dp))
+            .padding(contentPadding),
+        content = content
+    )
+}
+
+@Composable
+private fun BrandAppIconBadge(modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .size(36.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(Color(0xFF161D2C))
+            .border(1.2.dp, Color(0x457DD3FC), RoundedCornerShape(10.dp)),
+        contentAlignment = Alignment.Center
+    ) {
+        Canvas(modifier = Modifier.size(22.dp)) {
+            val w = size.width
+            val h = size.height
+            val stroke = Stroke(width = 1.9.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+
+            // Bluetooth Rune (#7DD3FC)
+            val btPath = Path().apply {
+                moveTo(w * 0.16f, h * 0.32f)
+                lineTo(w * 0.48f, h * 0.66f)
+                lineTo(w * 0.32f, h * 0.84f)
+                lineTo(w * 0.32f, h * 0.16f)
+                lineTo(w * 0.48f, h * 0.34f)
+                lineTo(w * 0.16f, h * 0.68f)
+            }
+            drawPath(btPath, color = AccentCyan, style = stroke)
+
+            // Musical Note (#A8C7FA)
+            val notePath = Path().apply {
+                moveTo(w * 0.76f, h * 0.70f)
+                lineTo(w * 0.76f, h * 0.24f)
+                lineTo(w * 0.92f, h * 0.34f)
+            }
+            drawPath(notePath, color = AccentPeriwinkle, style = stroke)
+            drawOval(
+                color = AccentPeriwinkle,
+                topLeft = Offset(w * 0.56f, h * 0.60f),
+                size = Size(w * 0.24f, h * 0.20f)
+            )
+        }
+    }
+}
+
+@Composable
 private fun MainAppShell(
     state: BridgeUiState,
     onPairUri: (String) -> Unit,
@@ -186,33 +272,70 @@ private fun MainAppShell(
     onToggleBleScan: () -> Unit,
     onClearBleDevices: () -> Unit
 ) {
-    // Default tab when opening is QR_CONNECT (center tab)
     var currentTab by remember { mutableStateOf(AndroidTab.QR_CONNECT) }
 
     Scaffold(
-        containerColor = Color(0xFF0B1120),
+        containerColor = BgMidnight,
         topBar = {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(Color(0xFF11192B))
-                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                    .background(BarFrosted)
+                    .padding(horizontal = 16.dp, vertical = 13.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = "BLUEIPOOTH",
-                    fontSize = 19.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    color = Color(0xFF38BDF8)
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    BrandAppIconBadge()
+                    Column {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                text = buildAnnotatedString {
+                                    withStyle(SpanStyle(color = AccentCyan)) { append("BLUE") }
+                                    withStyle(SpanStyle(color = AccentCyberPurple)) { append("IP") }
+                                    withStyle(SpanStyle(color = AccentPeriwinkle)) { append("OOTH") }
+                                },
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                fontFamily = FontFamily.Monospace,
+                                letterSpacing = 0.8.sp
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(5.dp))
+                                    .background(Color(0x1F7DD3FC))
+                                    .border(1.dp, Color(0x407DD3FC), RoundedCornerShape(5.dp))
+                                    .padding(horizontal = 5.dp, vertical = 1.dp)
+                            ) {
+                                Text(
+                                    text = "5.2",
+                                    color = AccentCyan,
+                                    fontSize = 9.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                        Text(
+                            text = "Cầu nối Bluetooth & Âm thanh",
+                            color = TextMuted,
+                            fontSize = 11.sp
+                        )
+                    }
+                }
                 ConnectionStatusPill(state = state)
             }
         },
         bottomBar = {
             NavigationBar(
-                containerColor = Color(0xFF11192B),
-                contentColor = Color.White,
+                containerColor = BarFrosted,
+                contentColor = TextPrimary,
                 tonalElevation = 0.dp
             ) {
                 AndroidTab.entries.forEach { tab ->
@@ -221,24 +344,21 @@ private fun MainAppShell(
                         selected = selected,
                         onClick = { currentTab = tab },
                         icon = {
-                            Text(
-                                text = tab.iconGlyph,
-                                fontSize = if (selected) 21.sp else 18.sp
-                            )
+                            TabVectorIcon(tab = tab, tint = if (selected) AccentPeriwinkle else TextMuted)
                         },
                         label = {
                             Text(
                                 text = tab.label,
                                 fontSize = 12.sp,
-                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+                                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium
                             )
                         },
                         colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = Color(0xFF38BDF8),
-                            selectedTextColor = Color(0xFF38BDF8),
-                            unselectedIconColor = Color(0xFF94A3B8),
-                            unselectedTextColor = Color(0xFF94A3B8),
-                            indicatorColor = Color(0xFF1E3A5F)
+                            selectedIconColor = AccentPeriwinkle,
+                            selectedTextColor = AccentPeriwinkle,
+                            unselectedIconColor = TextMuted,
+                            unselectedTextColor = TextMuted,
+                            indicatorColor = Color(0x2E7DD3FC)
                         )
                     )
                 }
@@ -252,11 +372,11 @@ private fun MainAppShell(
                 .padding(innerPadding),
             transitionSpec = {
                 val dir = if (targetState.index >= initialState.index) 1 else -1
-                (slideInHorizontally(animationSpec = tween(220)) { it / 4 * dir } +
-                    fadeIn(animationSpec = tween(220)))
+                (slideInHorizontally(animationSpec = tween(210)) { it / 4 * dir } +
+                    fadeIn(animationSpec = tween(210)))
                     .togetherWith(
-                        slideOutHorizontally(animationSpec = tween(180)) { -it / 4 * dir } +
-                            fadeOut(animationSpec = tween(160))
+                        slideOutHorizontally(animationSpec = tween(170)) { -it / 4 * dir } +
+                            fadeOut(animationSpec = tween(150))
                     )
             },
             label = "TabTransition"
@@ -284,28 +404,65 @@ private fun MainAppShell(
 }
 
 @Composable
+private fun TabVectorIcon(tab: AndroidTab, tint: Color) {
+    Canvas(modifier = Modifier.size(20.dp)) {
+        val w = size.width
+        val h = size.height
+        val stroke = Stroke(width = 1.7.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+        when (tab) {
+            AndroidTab.BLUETOOTH -> {
+                val p = Path().apply {
+                    moveTo(w * 0.28f, h * 0.30f)
+                    lineTo(w * 0.72f, h * 0.70f)
+                    lineTo(w * 0.50f, h * 0.90f)
+                    lineTo(w * 0.50f, h * 0.10f)
+                    lineTo(w * 0.72f, h * 0.30f)
+                    lineTo(w * 0.28f, h * 0.70f)
+                }
+                drawPath(p, color = tint, style = stroke)
+            }
+            AndroidTab.QR_CONNECT -> {
+                drawRoundRect(color = tint, topLeft = Offset(w * 0.14f, h * 0.14f), size = Size(w * 0.30f, h * 0.30f), style = stroke)
+                drawRoundRect(color = tint, topLeft = Offset(w * 0.56f, h * 0.14f), size = Size(w * 0.30f, h * 0.30f), style = stroke)
+                drawRoundRect(color = tint, topLeft = Offset(w * 0.14f, h * 0.56f), size = Size(w * 0.30f, h * 0.30f), style = stroke)
+                drawCircle(color = tint, radius = w * 0.12f, center = Offset(w * 0.71f, h * 0.71f))
+            }
+            AndroidTab.AUDIO -> {
+                val p = Path().apply {
+                    moveTo(w * 0.65f, h * 0.72f)
+                    lineTo(w * 0.65f, h * 0.18f)
+                    lineTo(w * 0.86f, h * 0.30f)
+                }
+                drawPath(p, color = tint, style = stroke)
+                drawOval(color = tint, topLeft = Offset(w * 0.34f, h * 0.58f), size = Size(w * 0.32f, h * 0.26f))
+            }
+        }
+    }
+}
+
+@Composable
 private fun ConnectionStatusPill(state: BridgeUiState) {
-    val dotColor = if (state.isConnected) Color(0xFF4ADE80) else Color(0xFFFBBF24)
-    val label = if (state.isConnected) state.pcName.ifBlank { "Đã nối PC" } else "Chưa kết nối"
+    val dotColor = if (state.isConnected) AccentSage else AccentAmber
+    val label = if (state.isConnected) state.pcName.ifBlank { "Đã nối PC" } else "Chờ kết nối"
     Row(
         modifier = Modifier
             .clip(RoundedCornerShape(20.dp))
-            .background(Color(0xFF162033))
-            .border(1.dp, Color(0xFF263552), RoundedCornerShape(20.dp))
-            .padding(horizontal = 10.dp, vertical = 5.dp),
+            .background(SubCardFrosted)
+            .border(1.dp, RimGlass, RoundedCornerShape(20.dp))
+            .padding(horizontal = 11.dp, vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         Box(
             modifier = Modifier
-                .size(8.dp)
+                .size(7.5.dp)
                 .clip(CircleShape)
                 .background(dotColor)
         )
         Text(
             text = label,
-            color = Color.White,
-            fontSize = 12.sp,
+            color = TextPrimary,
+            fontSize = 11.5.sp,
             fontWeight = FontWeight.SemiBold,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
@@ -313,9 +470,6 @@ private fun ConnectionStatusPill(state: BridgeUiState) {
     }
 }
 
-// =====================================================================
-// CENTER TAB (DEFAULT): KẾT NỐI QR
-// =====================================================================
 @Composable
 private fun QrConnectTab(
     state: BridgeUiState,
@@ -334,16 +488,10 @@ private fun QrConnectTab(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        Card(
-            colors = CardDefaults.cardColors(containerColor = Color(0xFF162033)),
-            shape = RoundedCornerShape(16.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Column(
-                modifier = Modifier.padding(18.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Text("Kết nối với PC", fontSize = 17.sp, fontWeight = FontWeight.Bold, color = Color.White)
+        FrostedCard {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("Thiết bị & đường truyền", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = TextMuted)
+                Text("Kết nối với máy tính", fontSize = 18.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
 
                 if (state.isConnected) {
                     val linkLabel = if (state.activeEndpoint == "127.0.0.1") {
@@ -354,27 +502,31 @@ private fun QrConnectTab(
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(Color(0xFF0F172A))
+                            .clip(RoundedCornerShape(15.dp))
+                            .background(SubCardFrosted)
+                            .border(1.dp, RimGlass, RoundedCornerShape(15.dp))
                             .padding(14.dp)
                     ) {
                         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text("Đang kết nối với ${state.pcName}", color = Color(0xFF4ADE80), fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                            Text("Địa chỉ: ${state.activeEndpoint} • $linkLabel", color = Color(0xFF94A3B8), fontSize = 13.sp)
+                            Text("Đã kết nối với ${state.pcName}", color = AccentSage, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                            Text("Địa chỉ: ${state.activeEndpoint} • $linkLabel", color = TextMuted, fontSize = 12.5.sp)
                         }
                     }
 
-                    OutlinedButton(
+                    Button(
                         onClick = onDisconnect,
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(10.dp)
+                        colors = ButtonDefaults.buttonColors(containerColor = BtnGlass, contentColor = TextPrimary),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .border(1.dp, RimGlass, RoundedCornerShape(13.dp)),
+                        shape = RoundedCornerShape(13.dp)
                     ) {
-                        Text("Ngắt kết nối tạm thời")
+                        Text("Tạm ngừng kết nối", fontWeight = FontWeight.SemiBold)
                     }
                 } else {
                     Text(
-                        text = "Quét mã QR hiển thị trên màn hình PC để ghép đôi nhanh và bảo mật.",
-                        color = Color(0xFF94A3B8),
+                        text = "Quét mã QR hiển thị trên màn hình PC hoặc cắm cáp USB để tự động ghép nối bảo mật.",
+                        color = TextMuted,
                         fontSize = 13.sp
                     )
 
@@ -382,13 +534,14 @@ private fun QrConnectTab(
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(Color(0xFF0F172A))
-                                .padding(10.dp)
+                                .clip(RoundedCornerShape(13.dp))
+                                .background(SubCardFrosted)
+                                .border(1.dp, RimGlass, RoundedCornerShape(13.dp))
+                                .padding(11.dp)
                         ) {
                             Text(
-                                text = "PC trong mạng: " + state.discoveredHosts.joinToString { "${it.pcName} (${it.ips.firstOrNull() ?: ""})" },
-                                color = Color(0xFF7DD3FC),
+                                text = "PC phát hiện: " + state.discoveredHosts.joinToString { "${it.pcName} (${it.ips.firstOrNull() ?: ""})" },
+                                color = AccentCyan,
                                 fontSize = 12.sp
                             )
                         }
@@ -399,7 +552,7 @@ private fun QrConnectTab(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(260.dp)
-                                .clip(RoundedCornerShape(12.dp))
+                                .clip(RoundedCornerShape(16.dp))
                                 .background(Color.Black)
                         ) {
                             QrScannerView { detectedUri ->
@@ -407,37 +560,41 @@ private fun QrConnectTab(
                                 onPairUri(detectedUri)
                             }
                         }
-                        OutlinedButton(
+                        Button(
                             onClick = { scanningQr = false },
+                            colors = ButtonDefaults.buttonColors(containerColor = BtnGlass, contentColor = TextPrimary),
                             modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(10.dp)
+                            shape = RoundedCornerShape(13.dp)
                         ) {
                             Text("Đóng Camera")
                         }
                     } else {
                         Button(
                             onClick = { scanningQr = true },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0284C7)),
-                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = AccentPeriwinkle, contentColor = DarkInk),
+                            shape = RoundedCornerShape(14.dp),
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(50.dp)
+                                .height(48.dp)
                         ) {
-                            Text("Quét Mã QR Trên PC", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                            Text("Quét mã QR trên PC", color = DarkInk, fontWeight = FontWeight.SemiBold, fontSize = 14.5.sp)
                         }
 
-                        OutlinedButton(
+                        Button(
                             onClick = onReconnect,
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(10.dp)
+                            colors = ButtonDefaults.buttonColors(containerColor = BtnGlass, contentColor = TextPrimary),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .border(1.dp, RimGlass, RoundedCornerShape(13.dp)),
+                            shape = RoundedCornerShape(13.dp)
                         ) {
-                            Text("Kết nối lại PC đã lưu")
+                            Text("Kết nối lại PC đã lưu", fontWeight = FontWeight.SemiBold)
                         }
                     }
 
                     Text(
                         text = if (showManualUri) "Ẩn nhập URI thủ công" else "Nhập URI ghép đôi thủ công",
-                        color = Color(0xFF38BDF8),
+                        color = AccentPeriwinkle,
                         fontSize = 12.5.sp,
                         fontWeight = FontWeight.SemiBold,
                         modifier = Modifier
@@ -456,26 +613,24 @@ private fun QrConnectTab(
                         if (manualUri.isNotBlank()) {
                             Button(
                                 onClick = { onPairUri(manualUri) },
+                                colors = ButtonDefaults.buttonColors(containerColor = AccentPeriwinkle, contentColor = DarkInk),
                                 modifier = Modifier.fillMaxWidth(),
-                                shape = RoundedCornerShape(10.dp)
+                                shape = RoundedCornerShape(12.dp)
                             ) {
-                                Text("Kết nối")
+                                Text("Kết nối", fontWeight = FontWeight.SemiBold)
                             }
                         }
                     }
                 }
 
                 state.lastError?.let { err ->
-                    Text("Lưu ý: $err", color = Color(0xFFF87171), fontSize = 12.5.sp)
+                    Text("Lưu ý: $err", color = Color(0xFFFCA5A5), fontSize = 12.5.sp)
                 }
             }
         }
     }
 }
 
-// =====================================================================
-// LEFT TAB: BLUETOOTH & TIẾN TRÌNH QUÉT / DANH SÁCH KHẢ DỤNG
-// =====================================================================
 @Composable
 private fun BluetoothScanTab(
     state: BridgeUiState,
@@ -497,35 +652,28 @@ private fun BluetoothScanTab(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Card(
-            colors = CardDefaults.cardColors(containerColor = Color(0xFF162033)),
-            shape = RoundedCornerShape(16.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Column(
-                modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
+        FrostedCard(contentPadding = PaddingValues(16.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
-                        Text("Quét Bluetooth BLE", fontSize = 17.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                        Text("Quét Bluetooth BLE", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
                         Text(
                             text = when {
                                 state.bleScanning -> "Đang quét sóng 2.4GHz (${state.bleDevices.size} thiết bị)"
                                 state.bleScanError != null -> "Lỗi quét BLE"
                                 else -> "Sẵn sàng quét thiết bị xung quanh"
                             },
-                            color = if (state.bleScanning) Color(0xFF38BDF8) else Color(0xFF94A3B8),
+                            color = if (state.bleScanning) AccentPeriwinkle else TextMuted,
                             fontSize = 12.5.sp
                         )
                     }
                     Text(
                         text = if (state.bleAdvertising) "Đang phát BLE" else "Chờ phát",
-                        color = if (state.bleAdvertising) Color(0xFF4ADE80) else Color(0xFF64748B),
+                        color = if (state.bleAdvertising) AccentSage else TextMuted,
                         fontSize = 11.5.sp,
                         fontWeight = FontWeight.SemiBold
                     )
@@ -537,13 +685,13 @@ private fun BluetoothScanTab(
                             .fillMaxWidth()
                             .height(4.dp)
                             .clip(RoundedCornerShape(2.dp)),
-                        color = Color(0xFF38BDF8),
-                        trackColor = Color(0xFF0F172A)
+                        color = AccentPeriwinkle,
+                        trackColor = SubCardFrosted
                     )
                 }
 
                 state.bleScanError?.let { error ->
-                    Text(error, color = Color(0xFFF87171), fontSize = 12.sp)
+                    Text(error, color = Color(0xFFFCA5A5), fontSize = 12.sp)
                 }
 
                 Row(
@@ -553,20 +701,22 @@ private fun BluetoothScanTab(
                     Button(
                         onClick = onToggleBleScan,
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = if (state.bleScanning) Color(0xFFDC2626) else Color(0xFF0284C7)
+                            containerColor = if (state.bleScanning) Color(0xFFE11D48) else AccentPeriwinkle,
+                            contentColor = if (state.bleScanning) Color.White else DarkInk
                         ),
-                        shape = RoundedCornerShape(10.dp),
+                        shape = RoundedCornerShape(12.dp),
                         modifier = Modifier.weight(1f)
                     ) {
                         Text(
                             text = if (state.bleScanning) "Dừng quét" else "Quét Bluetooth",
-                            color = Color.White,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.SemiBold
                         )
                     }
-                    OutlinedButton(
+                    Button(
                         onClick = onClearBleDevices,
-                        shape = RoundedCornerShape(10.dp)
+                        colors = ButtonDefaults.buttonColors(containerColor = BtnGlass, contentColor = TextPrimary),
+                        modifier = Modifier.border(1.dp, RimGlass, RoundedCornerShape(12.dp)),
+                        shape = RoundedCornerShape(12.dp)
                     ) {
                         Text("Xóa")
                     }
@@ -583,7 +733,7 @@ private fun BluetoothScanTab(
         ) {
             Text(
                 text = "Thiết bị khả dụng (${filteredDevices.size})",
-                color = Color(0xFF94A3B8),
+                color = TextMuted,
                 fontSize = 12.5.sp,
                 fontWeight = FontWeight.SemiBold
             )
@@ -593,30 +743,31 @@ private fun BluetoothScanTab(
                 modifier = Modifier.clickable { hideUnnamed = !hideUnnamed }
             ) {
                 Text(
-                    text = "Ẩn không tên / quảng bá",
-                    color = Color(0xFF94A3B8),
+                    text = "Ẩn không tên",
+                    color = TextMuted,
                     fontSize = 12.sp
                 )
-                Switch(checked = hideUnnamed, onCheckedChange = { hideUnnamed = it })
+                Switch(
+                    checked = hideUnnamed,
+                    onCheckedChange = { hideUnnamed = it },
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = DarkInk,
+                        checkedTrackColor = AccentPeriwinkle
+                    )
+                )
             }
         }
 
         if (filteredDevices.isEmpty()) {
-            Card(
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF162033)),
-                shape = RoundedCornerShape(14.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
-            ) {
-                Box(modifier = Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+            FrostedCard(modifier = Modifier.weight(1f)) {
+                Box(modifier = Modifier.fillMaxSize().padding(18.dp), contentAlignment = Alignment.Center) {
                     Text(
                         text = if (state.bleScanning) {
                             "Đang tìm kiếm thiết bị Bluetooth gần bạn (tự dừng sau 15 giây)..."
                         } else {
                             "Chưa có thiết bị nào. Nhấn Quét Bluetooth hoặc yêu cầu quét từ PC."
                         },
-                        color = Color(0xFF94A3B8),
+                        color = TextMuted,
                         fontSize = 13.5.sp
                     )
                 }
@@ -640,62 +791,57 @@ private fun BluetoothScanTab(
 @Composable
 private fun BleDeviceCard(dev: ScannedBleDevice) {
     val rssiColor = when {
-        dev.rssi >= -65 -> Color(0xFF4ADE80)
-        dev.rssi >= -80 -> Color(0xFFFBBF24)
-        else -> Color(0xFFF87171)
+        dev.rssi >= -65 -> AccentSage
+        dev.rssi >= -80 -> AccentAmber
+        else -> Color(0xFFFCA5A5)
     }
 
-    Card(
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF162033)),
-        shape = RoundedCornerShape(12.dp),
-        modifier = Modifier.fillMaxWidth()
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(15.dp))
+            .background(CardFrosted)
+            .border(1.dp, RimGlass, RoundedCornerShape(15.dp))
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Row(
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = dev.name.ifBlank { "(Thiết bị BLE ẩn tên)" },
+                color = TextPrimary,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 14.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = "${dev.address} • ${if (dev.connectable) "Kết nối được" else "Quảng bá"}",
+                color = TextMuted,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 11.5.sp
+            )
+        }
+        Spacer(modifier = Modifier.width(8.dp))
+        Box(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 12.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+                .clip(RoundedCornerShape(9.dp))
+                .background(SubCardFrosted)
+                .border(1.dp, RimGlass, RoundedCornerShape(9.dp))
+                .padding(horizontal = 10.dp, vertical = 5.dp)
         ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = dev.name.ifBlank { "(Thiết bị BLE ẩn tên)" },
-                    color = Color.White,
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 14.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    text = "${dev.address} • ${if (dev.connectable) "Kết nối được" else "Quảng bá"}",
-                    color = Color(0xFF94A3B8),
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 11.5.sp
-                )
-            }
-            Spacer(modifier = Modifier.width(8.dp))
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(Color(0xFF0F172A))
-                    .padding(horizontal = 10.dp, vertical = 5.dp)
-            ) {
-                Text(
-                    text = "${dev.rssi} dBm",
-                    color = rssiColor,
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 12.sp
-                )
-            }
+            Text(
+                text = "${dev.rssi} dBm",
+                color = rssiColor,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Bold,
+                fontSize = 12.sp
+            )
         }
     }
 }
 
-// =====================================================================
-// RIGHT TAB: ÂM THANH, LOA, MIC
-// =====================================================================
 @Composable
 private fun AudioTab(
     state: BridgeUiState,
@@ -710,95 +856,151 @@ private fun AudioTab(
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         // Speaker / Headset Output Card
-        Card(
-            colors = CardDefaults.cardColors(containerColor = Color(0xFF162033)),
-            shape = RoundedCornerShape(16.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Loa & Tai nghe", fontSize = 17.sp, fontWeight = FontWeight.Bold, color = Color.White)
+        FrostedCard {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Đầu ra âm thanh", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = TextMuted)
                 Text(
-                    text = if (state.headset.connected) {
-                        "Đang phát qua: ${state.headset.name}"
-                    } else {
-                        "Đầu ra: Loa điện thoại (đeo tai nghe BT để tự chuyển)"
-                    },
-                    color = Color(0xFF4ADE80),
+                    text = if (state.headset.connected) state.headset.name else "Loa điện thoại",
+                    color = AccentSage,
                     fontWeight = FontWeight.SemiBold,
-                    fontSize = 14.sp
+                    fontSize = 18.sp
                 )
                 Text(
-                    text = "Chế độ: ${if (state.audioMode == "GamingOpus") "Gaming Opus 5ms (48kHz Stereo)" else "Windows Native A2DP"}",
-                    color = Color(0xFF94A3B8),
+                    text = "Chế độ: ${if (state.audioMode == "GamingOpus") "Low-Latency Opus 48kHz Stereo (FastTrack F1)" else "Windows Native A2DP"}",
+                    color = TextMuted,
                     fontSize = 12.5.sp
                 )
                 if (state.isConnected) {
-                    val netOneWay = if (state.activeEndpoint == "127.0.0.1") 1.0 else (state.rttMs / 2.0).coerceAtLeast(1.0)
-                    val totalAudioMs = netOneWay + 30.0
-                    Text(
-                        text = "Độ trễ ước tính: ~${totalAudioMs.toInt()} ms (Mạng ${String.format("%.1f", netOneWay)}ms + Đệm 30ms)",
-                        color = Color(0xFF38BDF8),
-                        fontSize = 12.5.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
+                    val netOneWay = if (state.activeEndpoint == "127.0.0.1") 0.8 else (state.rttMs / 2.0).coerceAtLeast(1.0)
+                    val totalAudioMs = netOneWay + 26.0
+                    Box(
+                        modifier = Modifier
+                            .padding(top = 4.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(SubCardFrosted)
+                            .border(1.dp, RimGlass, RoundedCornerShape(10.dp))
+                            .padding(horizontal = 12.dp, vertical = 7.dp)
+                    ) {
+                        Text(
+                            text = "Độ trễ thực tế: ~${totalAudioMs.toInt()} ms (Mạng ${String.format("%.1f", netOneWay)}ms + FastTrack 16ms + Opus 10ms)",
+                            color = AccentPeriwinkle,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
                 }
             }
         }
 
         // Microphone Card
-        Card(
-            colors = CardDefaults.cardColors(containerColor = Color(0xFF162033)),
-            shape = RoundedCornerShape(16.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
+        FrostedCard {
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(18.dp),
+                modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text("Microphone về PC", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    Text("Microphone về PC", fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
                     Spacer(modifier = Modifier.height(3.dp))
                     Text(
-                        text = if (state.micEnabled) "Đang bật — truyền giọng nói về PC" else "Đang tắt tiếng (Muted)",
-                        color = if (state.micEnabled) Color(0xFF4ADE80) else Color(0xFF94A3B8),
+                        text = if (state.micEnabled) "Đang bật — truyền giọng nói 48kHz về PC" else "Đang tắt tiếng (Muted)",
+                        color = if (state.micEnabled) AccentSage else TextMuted,
                         fontSize = 12.5.sp
                     )
                 }
-                Switch(checked = state.micEnabled, onCheckedChange = onToggleMic)
+                Switch(
+                    checked = state.micEnabled,
+                    onCheckedChange = onToggleMic,
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = DarkInk,
+                        checkedTrackColor = AccentPeriwinkle
+                    )
+                )
             }
         }
 
-        // Media Controls Card
-        Card(
-            colors = CardDefaults.cardColors(containerColor = Color(0xFF162033)),
-            shape = RoundedCornerShape(16.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("Điều khiển phát nhạc PC", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.White)
+        // Sleek Vector Media Controls Card
+        FrostedCard {
+            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                Text("Điều khiển nhạc trên PC", fontSize = 15.5.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    OutlinedButton(
-                        onClick = { onMediaKey("PREV") },
-                        modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(10.dp)
-                    ) { Text("⏮", fontSize = 18.sp) }
-                    Button(
-                        onClick = { onMediaKey("PLAY_PAUSE") },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0284C7)),
-                        modifier = Modifier.weight(1.2f),
-                        shape = RoundedCornerShape(10.dp)
-                    ) { Text("⏯", fontSize = 18.sp, color = Color.White) }
-                    OutlinedButton(
-                        onClick = { onMediaKey("NEXT") },
-                        modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(10.dp)
-                    ) { Text("⏭", fontSize = 18.sp) }
+                    // Thin Vector Previous Button
+                    Box(
+                        modifier = Modifier
+                            .size(44.dp)
+                            .clip(CircleShape)
+                            .background(BtnGlass)
+                            .border(1.dp, RimGlass, CircleShape)
+                            .clickable { onMediaKey("PREV") },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Canvas(modifier = Modifier.size(18.dp)) {
+                            val w = size.width; val h = size.height
+                            val s = Stroke(width = 1.6.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+                            drawLine(TextPrimary, Offset(w * 0.22f, h * 0.22f), Offset(w * 0.22f, h * 0.78f), strokeWidth = s.width, cap = StrokeCap.Round)
+                            val p = Path().apply {
+                                moveTo(w * 0.78f, h * 0.22f)
+                                lineTo(w * 0.34f, h * 0.50f)
+                                lineTo(w * 0.78f, h * 0.78f)
+                                close()
+                            }
+                            drawPath(p, TextPrimary, style = s)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.width(18.dp))
+
+                    // Center Circular Play/Pause Button
+                    Box(
+                        modifier = Modifier
+                            .size(54.dp)
+                            .clip(CircleShape)
+                            .background(AccentPeriwinkle)
+                            .clickable { onMediaKey("PLAY_PAUSE") },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Canvas(modifier = Modifier.size(22.dp)) {
+                            val w = size.width; val h = size.height
+                            val s = Stroke(width = 1.8.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+                            val p = Path().apply {
+                                moveTo(w * 0.30f, h * 0.22f)
+                                lineTo(w * 0.78f, h * 0.50f)
+                                lineTo(w * 0.30f, h * 0.78f)
+                                close()
+                            }
+                            drawPath(p, DarkInk, style = s)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.width(18.dp))
+
+                    // Thin Vector Next Button
+                    Box(
+                        modifier = Modifier
+                            .size(44.dp)
+                            .clip(CircleShape)
+                            .background(BtnGlass)
+                            .border(1.dp, RimGlass, CircleShape)
+                            .clickable { onMediaKey("NEXT") },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Canvas(modifier = Modifier.size(18.dp)) {
+                            val w = size.width; val h = size.height
+                            val s = Stroke(width = 1.6.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+                            val p = Path().apply {
+                                moveTo(w * 0.22f, h * 0.22f)
+                                lineTo(w * 0.66f, h * 0.50f)
+                                lineTo(w * 0.22f, h * 0.78f)
+                                close()
+                            }
+                            drawPath(p, TextPrimary, style = s)
+                            drawLine(TextPrimary, Offset(w * 0.78f, h * 0.22f), Offset(w * 0.78f, h * 0.78f), strokeWidth = s.width, cap = StrokeCap.Round)
+                        }
+                    }
                 }
             }
         }

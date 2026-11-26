@@ -21,7 +21,7 @@ public sealed partial class BlueipoothCoordinator : IAsyncDisposable
     public WasapiOpusAudioEngine AudioEngine { get; }
 
     public string CurrentAudioMode { get; private set; } = "GamingOpus"; // "GamingOpus" | "NativeA2dp"
-    public int CurrentJitterBufferMs { get; private set; } = 30;
+    public int CurrentJitterBufferMs { get; private set; } = 20;
     public bool IsConnectionPaused => LanServer.ConnectionsPaused;
     public bool IsBleScanning { get; private set; }
     public HeadsetStateMessage? AttachedHeadset { get; private set; }
@@ -146,6 +146,9 @@ public sealed partial class BlueipoothCoordinator : IAsyncDisposable
     }
 
     public QrPairingPayload GetPairingQrPayload() => LanServer.GenerateCurrentQrPayload();
+
+    public Task SendPhoneMediaControlAsync(string key) =>
+        LanServer.SendControlMessageAsync(ControlMessageType.MediaControl, new MediaControlMessage(key));
 
     public void SetConnectionPaused(bool paused)
     {

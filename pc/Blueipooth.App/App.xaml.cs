@@ -9,6 +9,7 @@ public partial class App : System.Windows.Application
     private const string ShowEventName = @"Local\Blueipooth_App_ShowWindow";
 
     private Mutex? _instanceMutex;
+    private bool _ownsMutex;
     private EventWaitHandle? _showEvent;
 
     protected override void OnStartup(StartupEventArgs e)
@@ -29,6 +30,7 @@ public partial class App : System.Windows.Application
         };
 
         _instanceMutex = new Mutex(true, MutexName, out bool createdNew);
+        _ownsMutex = createdNew;
         if (!createdNew)
         {
             // Signal the already-running instance (e.g. minimized in System Tray) to show its window
@@ -77,7 +79,10 @@ public partial class App : System.Windows.Application
     protected override void OnExit(ExitEventArgs e)
     {
         _showEvent?.Dispose();
-        _instanceMutex?.ReleaseMutex();
+        if (_ownsMutex)
+        {
+            try { _instanceMutex?.ReleaseMutex(); } catch { }
+        }
         _instanceMutex?.Dispose();
         base.OnExit(e);
     }

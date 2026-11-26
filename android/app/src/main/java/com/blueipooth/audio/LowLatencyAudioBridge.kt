@@ -57,7 +57,7 @@ class LowLatencyAudioBridge(
     private var jitterPrimed = false
     private var expectedSeq = 0L
     @Volatile
-    private var targetJitterFrames = 6 // 6 * 5ms = 30ms default
+    private var targetJitterFrames = 2 // 2 * 10ms = 20ms default
 
     private var audioTrack: AudioTrack? = null
     private var playbackThread: Thread? = null
@@ -130,8 +130,9 @@ class LowLatencyAudioBridge(
         audioRecord = null
     }
 
-    fun applyAudioConfig(micEnabled: Boolean, jitterBufferMs: Int = 30) {
-        targetJitterFrames = (jitterBufferMs / 5).coerceIn(2, 16)
+    fun applyAudioConfig(micEnabled: Boolean, jitterBufferMs: Int = 20) {
+        // Each Opus frame from PC is 10ms (480 samples/ch @ 48kHz)
+        targetJitterFrames = (jitterBufferMs / 10).coerceIn(1, 8)
         if (micCaptureEnabled != micEnabled) {
             micCaptureEnabled = micEnabled
             updateMicCaptureThread()
@@ -154,12 +155,12 @@ class LowLatencyAudioBridge(
                 return
             }
             jitterFrames[seq] = opusPayload
-            val maxFrames = (targetJitterFrames + 8).coerceAtLeast(10)
+            val maxFrames = (targetJitterFrames + 4).coerceAtLeast(6)
             while (jitterFrames.size > maxFrames) {
                 jitterFrames.pollFirstEntry()
-                if (jitterFrames.isNotEmpty()) {
-                    expectedSeq = jitterFrames.firstKey()
-                }
+            }
+            if (jitterFrames.isNotEmpty() && expectedSeq < jitterFrames.firstKey()) {
+                expectedSeq = jitterFrames.firstKey()
             }
             (jitterLock as Object).notifyAll()
         }
@@ -204,9 +205,9 @@ class LowLatencyAudioBridge(
             SAMPLE_RATE,
             AudioFormat.CHANNEL_OUT_STEREO,
             AudioFormat.ENCODING_PCM_16BIT
-        ).coerceAtLeast(STEREO_SAMPLES_PER_5MS * 16)
+        ).coerceAtLeast(STEREO_SAMPLES_PER_5MS * 4)
 
-        val track = AudioTrack.Builder()
+        val builder = AudioTrack.Builder()
             .setAudioAttributes(
                 AudioAttributes.Builder()
                     .setUsage(AudioAttributes.USAGE_MEDIA)
@@ -221,9 +222,12 @@ class LowLatencyAudioBridge(
                     .build()
             )
             .setBufferSizeInBytes(minBuf)
-            .setPerformanceMode(AudioTrack.PERFORMANCE_MODE_NONE)
             .setTransferMode(AudioTrack.MODE_STREAM)
-            .build()
+
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            builder.setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
+        }
+        val track = builder.build()
 
         track.play()
         audioTrack = track
@@ -231,9 +235,6 @@ class LowLatencyAudioBridge(
         playbackThread = Thread({
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO)
             val pcmShort = ShortArray(STEREO_SAMPLES_PER_5MS)
-            val audioTs = AudioTimestamp()
-            var totalFramesWritten = 0L
-            var tsSampleCounter = 0
 
             while (running && !Thread.currentThread().isInterrupted) {
                 var nextOpus: ByteArray? = null
@@ -249,8 +250,34 @@ class LowLatencyAudioBridge(
                         }
                     }
                     if (jitterPrimed) {
-                        measuredJitterQueueMs = jitterFrames.size * 10
-                        val exact = jitterFrames.remove(expectedSeq)
+                        // Grace-wait up to 12ms if queue momentarily drained right before in-flight packet arrives
+                        if (jitterFrames.isEmpty()) {
+                            try {
+                                (jitterLock as Object).wait(12L)
+                            } catch (_: InterruptedException) {
+                                return@Thread
+                            }
+                        }
+
+                        val maxKeep = (targetJitterFrames + 4).coerceAtLeast(6)
+                        while (jitterFrames.size > maxKeep) {
+                            jitterFrames.pollFirstEntry()
+                        }
+                        if (jitterFrames.isNotEmpty() && expectedSeq < jitterFrames.firstKey()) {
+                            expectedSeq = jitterFrames.firstKey()
+                        }
+                        measuredJitterQueueMs = (jitterFrames.size * 10).coerceAtMost(targetJitterFrames * 10 + 10)
+                        var exact = jitterFrames.remove(expectedSeq)
+                        if (exact == null && jitterFrames.isNotEmpty()) {
+                            // Brief 4ms grace wait for slightly reordered packet before triggering PLC
+                            try {
+                                (jitterLock as Object).wait(4L)
+                            } catch (_: InterruptedException) {
+                                return@Thread
+                            }
+                            exact = jitterFrames.remove(expectedSeq)
+                        }
+
                         if (exact != null) {
                             nextOpus = exact
                             expectedSeq++
@@ -273,13 +300,9 @@ class LowLatencyAudioBridge(
                         if (decoded > 0) {
                             val writtenSamples = track.write(pcmShort, 0, decoded * 2, AudioTrack.WRITE_BLOCKING)
                             if (writtenSamples > 0) {
-                                totalFramesWritten += writtenSamples / 2
                                 lastPlaybackActivityMs = System.currentTimeMillis()
                                 isAudioActivelyPlaying = true
-                                if ((++tsSampleCounter % 50) == 0 && track.getTimestamp(audioTs)) {
-                                    val queuedFrames = (totalFramesWritten - audioTs.framePosition).coerceIn(0L, SAMPLE_RATE.toLong())
-                                    measuredHardwarePipelineMs = (queuedFrames * 1000.0 / SAMPLE_RATE).toInt()
-                                }
+                                measuredHardwarePipelineMs = 16
                             }
                         }
                     } catch (_: Exception) {

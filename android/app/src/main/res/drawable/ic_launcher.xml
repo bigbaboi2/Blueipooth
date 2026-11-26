@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Deep Frosted Midnight Rounded Background -->
+    <path
+        android:fillColor="#151B28"
+        android:pathData="M24,6 L84,6 A18,18 0 0,1 102,24 L102,84 A18,18 0 0,1 84,102 L24,102 A18,18 0 0,1 6,84 L6,24 A18,18 0 0,1 24,6 Z"
+        android:strokeWidth="3"
+        android:strokeColor="#557DD3FC" />
+    <!-- Left: Bluetooth Rune (#7DD3FC) -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M24,38 L50,64 L37,79 L37,27 L50,41 L24,68"
+        android:strokeWidth="6.5"
+        android:strokeColor="#7DD3FC"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <!-- Right: Musical Note Stem & Flag (#A8C7FA) -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M74,69 L74,31 L88,40"
+        android:strokeWidth="6.5"
+        android:strokeColor="#A8C7FA"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <!-- Right: Musical Note Head (#A8C7FA) -->
+    <path
+        android:fillColor="#A8C7FA"
+        android:pathData="M66,61 A11,9 0 1,0 66,79 A11,9 0 1,0 66,61 Z" />
+</vector>

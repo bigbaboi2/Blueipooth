@@ -22,6 +22,7 @@ public enum ControlMessageType : byte
     AudioConfig = 0x21,
     MediaControl = 0x22,
     DeviceStatus = 0x23,
+    UsbAudioOpus = 0x24,
 }
 
 public sealed record PairHelloMessage(
@@ -87,7 +88,15 @@ public sealed record DeviceStatusMessage(
     [property: JsonPropertyName("connectedBtDevices")] string? ConnectedBtDevices = null,
     [property: JsonPropertyName("audioJitterMs")] int AudioJitterMs = 0,
     [property: JsonPropertyName("audioHardwareMs")] int AudioHardwareMs = 0,
-    [property: JsonPropertyName("audioActivelyPlaying")] bool AudioActivelyPlaying = false);
+    [property: JsonPropertyName("audioActivelyPlaying")] bool AudioActivelyPlaying = false,
+    [property: JsonPropertyName("phoneMediaApp")] string? PhoneMediaApp = null,
+    [property: JsonPropertyName("phoneMediaTitle")] string? PhoneMediaTitle = null,
+    [property: JsonPropertyName("phoneMediaArtist")] string? PhoneMediaArtist = null,
+    [property: JsonPropertyName("phoneMediaPlaying")] bool PhoneMediaPlaying = false,
+    [property: JsonPropertyName("phoneMediaPosMs")] long PhoneMediaPosMs = 0,
+    [property: JsonPropertyName("phoneMediaDurMs")] long PhoneMediaDurMs = 0,
+    [property: JsonPropertyName("phoneMediaArtB64")] string? PhoneMediaArtB64 = null,
+    [property: JsonPropertyName("phoneVolumePercent")] int PhoneVolumePercent = 65);
 
 public static class ControlFrameCodec
 {

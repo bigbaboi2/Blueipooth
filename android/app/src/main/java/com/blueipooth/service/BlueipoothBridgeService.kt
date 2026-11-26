@@ -8,11 +8,17 @@ import android.app.Service
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ServiceInfo
+import android.graphics.Bitmap
 import android.media.AudioManager
+import android.media.MediaMetadata
+import android.media.session.MediaController
+import android.media.session.MediaSessionManager
+import android.media.session.PlaybackState
 import android.net.wifi.WifiManager
 import android.os.BatteryManager
 import android.os.Binder
@@ -21,6 +27,10 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
+import android.os.SystemClock
+import android.view.KeyEvent
+import java.io.ByteArrayOutputStream
+import java.util.Base64
 import com.blueipooth.audio.ConnectedHeadsetInfo
 import com.blueipooth.audio.LowLatencyAudioBridge
 import com.blueipooth.ble.BleRfProxyManager
@@ -84,7 +94,7 @@ class BlueipoothBridgeService : Service() {
             if (_uiState.value.isConnected) {
                 Thread { sendDeviceStatusToPc() }.start()
             }
-            mainHandler.postDelayed(this, 5_000L)
+            mainHandler.postDelayed(this, 1_500L)
         }
     }
 
@@ -100,6 +110,10 @@ class BlueipoothBridgeService : Service() {
     private var a2dpProxy: BluetoothProfile? = null
     @Volatile
     private var hfpProxy: BluetoothProfile? = null
+    @Volatile
+    private var lastArtTrackKey: String = ""
+    @Volatile
+    private var cachedPhoneArtB64: String = ""
 
     private lateinit var bleProxy: BleRfProxyManager
     private lateinit var audioBridge: LowLatencyAudioBridge
@@ -213,6 +227,9 @@ class BlueipoothBridgeService : Service() {
             },
             onDiscoveredHostsUpdated = { hosts ->
                 _uiState.update { it.copy(discoveredHosts = hosts) }
+            },
+            onMediaControlCommand = { key ->
+                handleRemoteMediaCommand(key)
             }
         )
 
@@ -331,7 +348,12 @@ class BlueipoothBridgeService : Service() {
             else -> "Không có media đang phát"
         }
 
-        val json = JSONObject()
+        val phoneMedia = queryActivePhoneMedia()
+        val maxVol = (am?.getStreamMaxVolume(AudioManager.STREAM_MUSIC) ?: 15).coerceAtLeast(1)
+        val curVol = (am?.getStreamVolume(AudioManager.STREAM_MUSIC) ?: 10).coerceIn(0, maxVol)
+        val phoneVolPct = Math.round((curVol * 100.0f) / maxVol).coerceIn(0, 100)
+
+        val jsonObj = JSONObject()
             .put("batteryPercent", pct)
             .put("isCharging", charging)
             .put("bluetoothEnabled", btOn)
@@ -340,8 +362,164 @@ class BlueipoothBridgeService : Service() {
             .put("audioJitterMs", audioBridge.measuredJitterQueueMs)
             .put("audioHardwareMs", audioBridge.measuredHardwarePipelineMs)
             .put("audioActivelyPlaying", audioBridge.isAudioActivelyPlaying)
-            .toString()
-        lanClient.sendControlJson(ControlMessageType.DEVICE_STATUS, json)
+            .put("phoneVolumePercent", phoneVolPct)
+
+        if (phoneMedia != null) {
+            jsonObj
+                .put("phoneMediaApp", phoneMedia.appName)
+                .put("phoneMediaTitle", phoneMedia.title)
+                .put("phoneMediaArtist", phoneMedia.artist)
+                .put("phoneMediaPlaying", phoneMedia.playing)
+                .put("phoneMediaPosMs", phoneMedia.positionMs)
+                .put("phoneMediaDurMs", phoneMedia.durationMs)
+            if (phoneMedia.artB64.isNotEmpty()) {
+                jsonObj.put("phoneMediaArtB64", phoneMedia.artB64)
+            }
+        }
+
+        lanClient.sendControlJson(ControlMessageType.DEVICE_STATUS, jsonObj.toString())
+    }
+
+    private data class PhoneMediaSnapshot(
+        val appName: String,
+        val title: String,
+        val artist: String,
+        val playing: Boolean,
+        val positionMs: Long,
+        val durationMs: Long,
+        val artB64: String
+    )
+
+    private fun findBestPhoneMediaController(): MediaController? {
+        return try {
+            val msm = getSystemService(Context.MEDIA_SESSION_SERVICE) as? MediaSessionManager ?: return null
+            val comp = ComponentName(this, BlueipoothMediaListener::class.java)
+            val controllers = msm.getActiveSessions(comp)
+                .filter { it.packageName != "app.nectarlink" && it.packageName != packageName }
+            if (controllers.isEmpty()) return null
+            controllers.firstOrNull { it.playbackState?.state == PlaybackState.STATE_PLAYING }
+                ?: controllers.firstOrNull { !it.metadata?.getString(MediaMetadata.METADATA_KEY_TITLE).isNullOrBlank() }
+                ?: controllers.firstOrNull()
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun formatPackageName(pkg: String): String {
+        val p = pkg.lowercase()
+        return when {
+            p.contains("youtube") && p.contains("music") -> "YT Music"
+            p.contains("youtube") -> "YouTube"
+            p.contains("spotify") -> "Spotify"
+            p.contains("trill") || p.contains("tiktok") || p.contains("musically") -> "TikTok"
+            p.contains("zing") -> "Zing MP3"
+            p.contains("NCT") || p.contains("nhaccuatui") -> "NhacCuaTui"
+            p.contains("soundcloud") -> "SoundCloud"
+            p.contains("chrome") || p.contains("browser") -> "Browser"
+            p.contains("facebook") -> "Facebook"
+            else -> pkg.substringAfterLast('.').replaceFirstChar { it.uppercase() }
+        }
+    }
+
+    private fun queryActivePhoneMedia(): PhoneMediaSnapshot? {
+        val ctrl = findBestPhoneMediaController() ?: return null
+        val meta = ctrl.metadata
+        val pb = ctrl.playbackState
+        val title = meta?.getString(MediaMetadata.METADATA_KEY_TITLE)?.trim().orEmpty()
+        if (title.isEmpty()) return null
+
+        val artist = (meta?.getString(MediaMetadata.METADATA_KEY_ARTIST)
+            ?: meta?.getString(MediaMetadata.METADATA_KEY_AUTHOR)
+            ?: meta?.getString(MediaMetadata.METADATA_KEY_ALBUM)
+            ?: "").trim()
+        val durMs = (meta?.getLong(MediaMetadata.METADATA_KEY_DURATION) ?: 0L).coerceAtLeast(0L)
+        val rawPos = (pb?.position ?: 0L).coerceAtLeast(0L)
+        val playing = pb?.state == PlaybackState.STATE_PLAYING
+        val posMs = if (playing && pb != null && pb.lastPositionUpdateTime > 0L) {
+            val delta = (SystemClock.elapsedRealtime() - pb.lastPositionUpdateTime).coerceAtLeast(0L)
+            (rawPos + (delta * pb.playbackSpeed).toLong()).coerceAtMost(if (durMs > 0) durMs else Long.MAX_VALUE)
+        } else {
+            rawPos
+        }
+
+        val trackKey = "${ctrl.packageName}|$title|$artist"
+        if (trackKey != lastArtTrackKey) {
+            lastArtTrackKey = trackKey
+            cachedPhoneArtB64 = try {
+                val bmp = meta?.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)
+                    ?: meta?.getBitmap(MediaMetadata.METADATA_KEY_ART)
+                    ?: meta?.getBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON)
+                if (bmp != null) {
+                    val scaled = Bitmap.createScaledBitmap(bmp, 96, 96, true)
+                    val baos = ByteArrayOutputStream()
+                    scaled.compress(Bitmap.CompressFormat.JPEG, 80, baos)
+                    Base64.getEncoder().encodeToString(baos.toByteArray())
+                } else ""
+            } catch (_: Exception) {
+                ""
+            }
+        }
+
+        return PhoneMediaSnapshot(
+            appName = formatPackageName(ctrl.packageName),
+            title = title,
+            artist = artist.ifEmpty { formatPackageName(ctrl.packageName) },
+            playing = playing,
+            positionMs = posMs,
+            durationMs = durMs,
+            artB64 = cachedPhoneArtB64
+        )
+    }
+
+    private fun handleRemoteMediaCommand(key: String) {
+        val ctrl = findBestPhoneMediaController()
+        val tc = ctrl?.transportControls
+        val pbState = ctrl?.playbackState?.state
+        val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+        val upper = key.trim().uppercase()
+
+        try {
+            when {
+                upper == "PLAY_PAUSE" -> {
+                    if (tc != null) {
+                        if (pbState == PlaybackState.STATE_PLAYING) tc.pause() else tc.play()
+                    } else {
+                        dispatchKey(am, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE)
+                    }
+                }
+                upper == "NEXT" -> if (tc != null) tc.skipToNext() else dispatchKey(am, KeyEvent.KEYCODE_MEDIA_NEXT)
+                upper == "PREV" -> if (tc != null) tc.skipToPrevious() else dispatchKey(am, KeyEvent.KEYCODE_MEDIA_PREVIOUS)
+                upper.startsWith("SEEK_REL:") -> {
+                    val deltaMs = upper.substringAfter("SEEK_REL:").toLongOrNull() ?: 0L
+                    val snap = queryActivePhoneMedia()
+                    if (tc != null && snap != null) {
+                        val target = (snap.positionMs + deltaMs).coerceAtLeast(0L)
+                        tc.seekTo(if (snap.durationMs > 0) target.coerceAtMost(snap.durationMs) else target)
+                    }
+                }
+                upper.startsWith("SEEK_POS:") -> {
+                    val targetMs = upper.substringAfter("SEEK_POS:").toLongOrNull() ?: 0L
+                    tc?.seekTo(targetMs.coerceAtLeast(0L))
+                }
+                upper.startsWith("SET_VOL:") -> {
+                    val pct = upper.substringAfter("SET_VOL:").toIntOrNull()?.coerceIn(0, 100) ?: return
+                    if (am != null) {
+                        val maxV = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+                        val newV = Math.round((pct * maxV) / 100.0f).coerceIn(0, maxV)
+                        am.setStreamVolume(AudioManager.STREAM_MUSIC, newV, 0)
+                    }
+                }
+            }
+        } catch (_: Exception) {
+        }
+        mainHandler.postDelayed({ Thread { sendDeviceStatusToPc() }.start() }, 180L)
+    }
+
+    private fun dispatchKey(am: AudioManager?, keyCode: Int) {
+        am ?: return
+        val now = SystemClock.uptimeMillis()
+        am.dispatchMediaKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_DOWN, keyCode, 0))
+        am.dispatchMediaKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_UP, keyCode, 0))
     }
 
     private fun sendHeadsetStateToPc(hs: ConnectedHeadsetInfo) {
